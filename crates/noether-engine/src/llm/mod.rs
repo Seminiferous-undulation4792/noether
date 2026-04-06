@@ -58,8 +58,11 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            model: "gemini-2.5-flash".into(),
-            max_tokens: 4096,
+            // gemini-2.5-flash: fast, no thinking mode, ideal for structured JSON tasks.
+            // Use VERTEX_AI_MODEL=gemini-2.5-pro to override when quality matters more.
+            model: std::env::var("VERTEX_AI_MODEL")
+                .unwrap_or_else(|_| "gemini-2.5-flash".into()),
+            max_tokens: 8192,
             temperature: 0.2,
         }
     }

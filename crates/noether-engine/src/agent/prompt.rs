@@ -229,7 +229,7 @@ pub fn extract_synthesis_response(response: &str) -> Option<SynthesisResponse> {
 }
 
 pub fn extract_json(response: &str) -> Option<&str> {
-    // Try to find ```json ... ``` block
+    // 1. Prefer ```json ... ``` fenced block
     if let Some(start) = response.find("```json") {
         let json_start = start + 7;
         let json_content = &response[json_start..];
@@ -238,21 +238,73 @@ pub fn extract_json(response: &str) -> Option<&str> {
         }
     }
 
-    // Try to find ``` ... ``` block
+    // 2. Plain ``` ... ``` fenced block (skip language tag on first line if any)
     if let Some(start) = response.find("```") {
         let content_start = start + 3;
         let content = &response[content_start..];
-        let json_start = content.find('\n').map(|n| n + 1).unwrap_or(0);
-        let json_content = &content[json_start..];
-        if let Some(end) = json_content.find("```") {
-            return Some(json_content[..end].trim());
+        // Skip a non-brace first line (e.g. a language tag like "json" without the marker)
+        let (skip, rest) = match content.find('\n') {
+            Some(nl) => {
+                let first_line = content[..nl].trim();
+                if first_line.starts_with('{') {
+                    (0, content)
+                } else {
+                    (nl + 1, &content[nl + 1..])
+                }
+            }
+            None => (0, content),
+        };
+        let _ = skip;
+        if let Some(end) = rest.find("```") {
+            let candidate = rest[..end].trim();
+            if candidate.starts_with('{') {
+                return Some(candidate);
+            }
         }
     }
 
-    // Try raw JSON (starts with {)
-    let trimmed = response.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        return Some(trimmed);
+    // 3. Raw JSON anywhere in the response: scan for the first top-level { ... } span
+    // using brace depth counting (handles nested objects correctly).
+    if let Some(brace_start) = response.find('{') {
+        let bytes = response.as_bytes();
+        let mut depth: i32 = 0;
+        let mut in_string = false;
+        let mut escape = false;
+        let mut brace_end: Option<usize> = None;
+
+        for (i, &b) in bytes[brace_start..].iter().enumerate() {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if in_string {
+                match b {
+                    b'\\' => escape = true,
+                    b'"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match b {
+                b'"' => in_string = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        brace_end = Some(brace_start + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(end) = brace_end {
+            let candidate = response[brace_start..end].trim();
+            if !candidate.is_empty() {
+                return Some(candidate);
+            }
+        }
     }
 
     None

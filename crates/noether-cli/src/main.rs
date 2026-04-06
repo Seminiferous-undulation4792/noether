@@ -51,9 +51,10 @@ enum Commands {
     Compose {
         /// Problem description in natural language
         problem: String,
-        /// LLM model to use (default: gemini-2.5-flash)
-        #[arg(long, default_value = "gemini-2.5-flash")]
-        model: String,
+        /// LLM model to use. Defaults to VERTEX_AI_MODEL env var, then gemini-2.5-flash.
+        /// Mistral models auto-route: mistral-small-2503, mistral-medium-3, codestral-2
+        #[arg(long)]
+        model: Option<String>,
         /// Show the graph without executing
         #[arg(long)]
         dry_run: bool,
@@ -207,6 +208,11 @@ fn main() {
                 eprintln!("LLM provider: {llm_name}");
             }
 
+            // Resolve model: CLI flag → VERTEX_AI_MODEL env → default for this provider
+            let resolved_model = model
+                .or_else(|| std::env::var("VERTEX_AI_MODEL").ok())
+                .unwrap_or_else(|| noether_engine::llm::LlmConfig::default().model);
+
             let input_value = input
                 .as_deref()
                 .map(|s| serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())))
@@ -216,7 +222,7 @@ fn main() {
                 &mut index,
                 llm.as_ref(),
                 &problem,
-                &model,
+                &resolved_model,
                 dry_run,
                 &input_value,
             );
