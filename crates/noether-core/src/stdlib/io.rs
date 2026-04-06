@@ -150,5 +150,30 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
             .example(json!({"name": "LANG"}), json!("en_US.UTF-8"))
             .build_stdlib(key)
             .unwrap(),
+        // ── HTTP response adapters ─────────────────────────────────────────────
+        StageBuilder::new("http_body")
+            .input(http_response_type())
+            .output(NType::Text)
+            .pure()
+            .description("Extract the body text from an HTTP response record")
+            .example(json!({"status": 200, "body": "{\"ok\":true}", "headers": {"content-type": "application/json"}}), json!("{\"ok\":true}"))
+            .example(json!({"status": 404, "body": "not found", "headers": {}}), json!("not found"))
+            .example(json!({"status": 200, "body": "", "headers": {}}), json!(""))
+            .example(json!({"status": 201, "body": "{\"id\":1}", "headers": {"content-type": "application/json"}}), json!("{\"id\":1}"))
+            .example(json!({"status": 200, "body": "ok", "headers": {"content-type": "text/plain"}}), json!("ok"))
+            .build_stdlib(key)
+            .unwrap(),
+        StageBuilder::new("http_status")
+            .input(http_response_type())
+            .output(NType::Number)
+            .pure()
+            .description("Extract the status code from an HTTP response record")
+            .example(json!({"status": 200, "body": "ok", "headers": {}}), json!(200.0))
+            .example(json!({"status": 404, "body": "not found", "headers": {}}), json!(404.0))
+            .example(json!({"status": 201, "body": "{}", "headers": {}}), json!(201.0))
+            .example(json!({"status": 500, "body": "error", "headers": {}}), json!(500.0))
+            .example(json!({"status": 301, "body": "", "headers": {"location": "/new"}}), json!(301.0))
+            .build_stdlib(key)
+            .unwrap(),
     ]
 }

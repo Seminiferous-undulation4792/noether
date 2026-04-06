@@ -122,5 +122,97 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
             .example(json!({"text": "abc", "algorithm": "sha256"}), json!({"hash": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "algorithm": "sha256"}))
             .build_stdlib(key)
             .unwrap(),
+        // ── New text manipulation stages ───────────────────────────────────────
+        StageBuilder::new("text_upper")
+            .input(NType::Text)
+            .output(NType::Text)
+            .pure()
+            .description("Convert text to uppercase")
+            .example(json!("hello"), json!("HELLO"))
+            .example(json!("World"), json!("WORLD"))
+            .example(json!("foo BAR"), json!("FOO BAR"))
+            .example(json!(""), json!(""))
+            .example(json!("123abc"), json!("123ABC"))
+            .build_stdlib(key)
+            .unwrap(),
+        StageBuilder::new("text_lower")
+            .input(NType::Text)
+            .output(NType::Text)
+            .pure()
+            .description("Convert text to lowercase")
+            .example(json!("HELLO"), json!("hello"))
+            .example(json!("World"), json!("world"))
+            .example(json!("FOO BAR"), json!("foo bar"))
+            .example(json!(""), json!(""))
+            .example(json!("123ABC"), json!("123abc"))
+            .build_stdlib(key)
+            .unwrap(),
+        StageBuilder::new("text_trim")
+            .input(NType::Text)
+            .output(NType::Text)
+            .pure()
+            .description("Remove leading and trailing whitespace from text")
+            .example(json!("  hello  "), json!("hello"))
+            .example(json!("\thello\n"), json!("hello"))
+            .example(json!("no spaces"), json!("no spaces"))
+            .example(json!(""), json!(""))
+            .example(json!("  "), json!(""))
+            .build_stdlib(key)
+            .unwrap(),
+        StageBuilder::new("text_length")
+            .input(NType::Text)
+            .output(NType::Number)
+            .pure()
+            .description("Return the number of characters in a text string")
+            .example(json!("hello"), json!(5.0))
+            .example(json!(""), json!(0.0))
+            .example(json!("abc"), json!(3.0))
+            .example(json!("hello world"), json!(11.0))
+            .example(json!("αβγ"), json!(3.0))
+            .build_stdlib(key)
+            .unwrap(),
+        StageBuilder::new("text_contains")
+            .input(NType::record([
+                ("text", NType::Text),
+                ("substring", NType::Text),
+            ]))
+            .output(NType::Bool)
+            .pure()
+            .description("Check if text contains a substring; case-sensitive")
+            .example(json!({"text": "hello world", "substring": "world"}), json!(true))
+            .example(json!({"text": "hello world", "substring": "xyz"}), json!(false))
+            .example(json!({"text": "hello", "substring": ""}), json!(true))
+            .example(json!({"text": "", "substring": "x"}), json!(false))
+            .example(json!({"text": "Hello", "substring": "hello"}), json!(false))
+            .build_stdlib(key)
+            .unwrap(),
+        StageBuilder::new("text_reverse")
+            .input(NType::Text)
+            .output(NType::Text)
+            .pure()
+            .description("Reverse the characters in a text string")
+            .example(json!("hello"), json!("olleh"))
+            .example(json!("abc"), json!("cba"))
+            .example(json!(""), json!(""))
+            .example(json!("a"), json!("a"))
+            .example(json!("racecar"), json!("racecar"))
+            .build_stdlib(key)
+            .unwrap(),
+        StageBuilder::new("text_replace")
+            .input(NType::record([
+                ("text", NType::Text),
+                ("from", NType::Text),
+                ("to", NType::Text),
+            ]))
+            .output(NType::Text)
+            .pure()
+            .description("Replace all literal occurrences of a substring in text")
+            .example(json!({"text": "hello world", "from": "world", "to": "Rust"}), json!("hello Rust"))
+            .example(json!({"text": "aaa", "from": "a", "to": "b"}), json!("bbb"))
+            .example(json!({"text": "no match", "from": "xyz", "to": "abc"}), json!("no match"))
+            .example(json!({"text": "foo.bar.baz", "from": ".", "to": "/"}), json!("foo/bar/baz"))
+            .example(json!({"text": "hello", "from": "", "to": "x"}), json!("hello"))
+            .build_stdlib(key)
+            .unwrap(),
     ]
 }

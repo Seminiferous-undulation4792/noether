@@ -61,6 +61,9 @@ enum Commands {
         /// Input data as JSON string (default: null)
         #[arg(long)]
         input: Option<String>,
+        /// Bypass the composition cache and always call the LLM
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -200,6 +203,7 @@ fn main() {
             model,
             dry_run,
             input,
+            force,
         } => {
             let mut store = init_store();
             let mut index = build_index(&store);
@@ -217,14 +221,21 @@ fn main() {
                 .as_deref()
                 .map(|s| serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())))
                 .unwrap_or(serde_json::Value::Null);
+
+            let cache_path = noether_dir().join("compositions.json");
+
             commands::compose::cmd_compose(
                 &mut store,
                 &mut index,
                 llm.as_ref(),
                 &problem,
-                &resolved_model,
-                dry_run,
-                &input_value,
+                commands::compose::ComposeOptions {
+                    model: &resolved_model,
+                    dry_run,
+                    input: &input_value,
+                    force,
+                    cache_path: &cache_path,
+                },
             );
         }
     }

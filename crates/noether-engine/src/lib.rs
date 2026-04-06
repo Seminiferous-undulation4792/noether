@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod checker;
+pub mod composition_cache;
 pub mod error;
 pub mod executor;
 pub mod index;

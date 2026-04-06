@@ -32,6 +32,13 @@ pub fn find_implementation(description: &str) -> Option<StageFn> {
             Some(text::text_template)
         }
         "Compute a cryptographic hash of text; defaults to SHA-256" => Some(text::text_hash),
+        "Convert text to uppercase" => Some(text::text_upper),
+        "Convert text to lowercase" => Some(text::text_lower),
+        "Remove leading and trailing whitespace from text" => Some(text::text_trim),
+        "Return the number of characters in a text string" => Some(text::text_length),
+        "Check if text contains a substring; case-sensitive" => Some(text::text_contains),
+        "Reverse the characters in a text string" => Some(text::text_reverse),
+        "Replace all literal occurrences of a substring in text" => Some(text::text_replace),
 
         // Collections
         "Sort a list; optionally by a field name and/or in descending order" => {
@@ -43,6 +50,12 @@ pub fn find_implementation(description: &str) -> Option<StageFn> {
         }
         "Take the first N elements from a list" => Some(collections::take),
         "Group list items by the value of a named field" => Some(collections::group_by),
+        "Sum all numbers in a list" => Some(collections::num_sum),
+        "Compute the arithmetic mean of a list of numbers; fails on empty list" => Some(collections::num_avg),
+        "Return the minimum value in a list of numbers; fails on empty list" => Some(collections::num_min),
+        "Return the maximum value in a list of numbers; fails on empty list" => Some(collections::num_max),
+        "Remove duplicate values from a list, preserving first-occurrence order" => Some(collections::list_dedup),
+        "Return the number of elements in a list" => Some(collections::list_length),
 
         // Data
         "Deep merge two JSON values; patch values override base" => Some(data::json_merge),
@@ -64,6 +77,8 @@ pub fn find_implementation(description: &str) -> Option<StageFn> {
         "Make an HTTP GET request" => Some(io::http_get),
         "Make an HTTP POST request" => Some(io::http_post),
         "Make an HTTP PUT request" => Some(io::http_put),
+        "Extract the body text from an HTTP response record" => Some(io::http_body),
+        "Extract the status code from an HTTP response record" => Some(io::http_status),
 
         _ => None,
     }

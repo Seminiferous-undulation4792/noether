@@ -127,6 +127,65 @@ pub fn text_hash(input: &Value) -> Result<Value, ExecutionError> {
     }))
 }
 
+pub fn text_upper(input: &Value) -> Result<Value, ExecutionError> {
+    let text = input.as_str().ok_or_else(|| ExecutionError::StageFailed {
+        stage_id: StageId("text_upper".into()),
+        message: "input must be a string".into(),
+    })?;
+    Ok(json!(text.to_uppercase()))
+}
+
+pub fn text_lower(input: &Value) -> Result<Value, ExecutionError> {
+    let text = input.as_str().ok_or_else(|| ExecutionError::StageFailed {
+        stage_id: StageId("text_lower".into()),
+        message: "input must be a string".into(),
+    })?;
+    Ok(json!(text.to_lowercase()))
+}
+
+pub fn text_trim(input: &Value) -> Result<Value, ExecutionError> {
+    let text = input.as_str().ok_or_else(|| ExecutionError::StageFailed {
+        stage_id: StageId("text_trim".into()),
+        message: "input must be a string".into(),
+    })?;
+    Ok(json!(text.trim()))
+}
+
+pub fn text_length(input: &Value) -> Result<Value, ExecutionError> {
+    let text = input.as_str().ok_or_else(|| ExecutionError::StageFailed {
+        stage_id: StageId("text_length".into()),
+        message: "input must be a string".into(),
+    })?;
+    Ok(json!(text.chars().count() as f64))
+}
+
+pub fn text_contains(input: &Value) -> Result<Value, ExecutionError> {
+    let text = get_str(input, "text")?;
+    let substring = get_str(input, "substring")?;
+    if substring.is_empty() {
+        return Ok(json!(true));
+    }
+    Ok(json!(text.contains(substring)))
+}
+
+pub fn text_reverse(input: &Value) -> Result<Value, ExecutionError> {
+    let text = input.as_str().ok_or_else(|| ExecutionError::StageFailed {
+        stage_id: StageId("text_reverse".into()),
+        message: "input must be a string".into(),
+    })?;
+    Ok(json!(text.chars().rev().collect::<String>()))
+}
+
+pub fn text_replace(input: &Value) -> Result<Value, ExecutionError> {
+    let text = get_str(input, "text")?;
+    let from = get_str(input, "from")?;
+    let to = get_str(input, "to")?;
+    if from.is_empty() {
+        return Ok(json!(text));
+    }
+    Ok(json!(text.replace(from, to)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

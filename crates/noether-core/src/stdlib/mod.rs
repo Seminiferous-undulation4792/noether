@@ -40,7 +40,7 @@ mod tests {
     #[test]
     fn load_stdlib_returns_50_stages() {
         let stages = load_stdlib();
-        assert_eq!(stages.len(), 50);
+        assert_eq!(stages.len(), 65);
     }
 
     #[test]

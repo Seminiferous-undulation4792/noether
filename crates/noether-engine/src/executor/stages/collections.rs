@@ -141,6 +141,79 @@ pub fn group_by(input: &Value) -> Result<Value, ExecutionError> {
     Ok(Value::Object(result))
 }
 
+pub fn num_sum(input: &Value) -> Result<Value, ExecutionError> {
+    let items = input
+        .as_array()
+        .ok_or_else(|| fail("num_sum", "input must be an array of numbers"))?;
+    let sum: f64 = items
+        .iter()
+        .map(|v| v.as_f64().unwrap_or(0.0))
+        .sum();
+    Ok(json!(sum))
+}
+
+pub fn num_avg(input: &Value) -> Result<Value, ExecutionError> {
+    let items = input
+        .as_array()
+        .ok_or_else(|| fail("num_avg", "input must be an array of numbers"))?;
+    if items.is_empty() {
+        return Err(fail("num_avg", "cannot compute average of empty list"));
+    }
+    let sum: f64 = items.iter().map(|v| v.as_f64().unwrap_or(0.0)).sum();
+    Ok(json!(sum / items.len() as f64))
+}
+
+pub fn num_min(input: &Value) -> Result<Value, ExecutionError> {
+    let items = input
+        .as_array()
+        .ok_or_else(|| fail("num_min", "input must be an array of numbers"))?;
+    if items.is_empty() {
+        return Err(fail("num_min", "cannot compute min of empty list"));
+    }
+    let min = items
+        .iter()
+        .map(|v| v.as_f64().unwrap_or(f64::INFINITY))
+        .fold(f64::INFINITY, f64::min);
+    Ok(json!(min))
+}
+
+pub fn num_max(input: &Value) -> Result<Value, ExecutionError> {
+    let items = input
+        .as_array()
+        .ok_or_else(|| fail("num_max", "input must be an array of numbers"))?;
+    if items.is_empty() {
+        return Err(fail("num_max", "cannot compute max of empty list"));
+    }
+    let max = items
+        .iter()
+        .map(|v| v.as_f64().unwrap_or(f64::NEG_INFINITY))
+        .fold(f64::NEG_INFINITY, f64::max);
+    Ok(json!(max))
+}
+
+pub fn list_dedup(input: &Value) -> Result<Value, ExecutionError> {
+    let items = input
+        .as_array()
+        .ok_or_else(|| fail("list_dedup", "input must be an array"))?;
+    let mut seen = Vec::new();
+    let mut result = Vec::new();
+    for item in items {
+        let item_str = item.to_string();
+        if !seen.contains(&item_str) {
+            seen.push(item_str);
+            result.push(item.clone());
+        }
+    }
+    Ok(Value::Array(result))
+}
+
+pub fn list_length(input: &Value) -> Result<Value, ExecutionError> {
+    let items = input
+        .as_array()
+        .ok_or_else(|| fail("list_length", "input must be an array"))?;
+    Ok(json!(items.len() as f64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

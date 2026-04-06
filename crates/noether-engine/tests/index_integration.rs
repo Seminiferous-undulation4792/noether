@@ -25,7 +25,7 @@ fn build_index(store: &MemoryStore) -> SemanticIndex {
 fn index_all_stdlib_stages() {
     let store = init_store();
     let index = build_index(&store);
-    assert_eq!(index.len(), 50);
+    assert_eq!(index.len(), 65);
 }
 
 #[test]

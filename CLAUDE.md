@@ -62,8 +62,8 @@ crates/
 - `stage::validation` — `infer_type()` / `infer_type_with_hint()` for JSON→NType inference, `validate_stage()` for example validation
 - `stdlib::load_stdlib()` — loads all 50 stdlib stages (deterministic IDs, Ed25519-signed)
 
-### stdlib categories (50 stages)
-Scalar (5), Collections (8), Control (6), I/O (8), LLM primitives (4), Data (7), Noether internal (6), Text processing (6)
+### stdlib categories (65 stages)
+Scalar (5), Collections (14), Control (6), I/O (10), LLM primitives (4), Data (7), Noether internal (6), Text processing (13)
 
 ### noether-store modules
 - `StageStore` trait — put/get/contains/list/update_lifecycle/stats

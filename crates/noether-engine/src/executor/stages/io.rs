@@ -169,3 +169,21 @@ pub fn http_put(input: &Value) -> Result<Value, ExecutionError> {
     let body = resp.text().map_err(|e| fail("http_put", e.to_string()))?;
     Ok(json!({"status": status, "body": body, "headers": headers}))
 }
+
+// ── HTTP response adapters ────────────────────────────────────────────────────
+
+pub fn http_body(input: &Value) -> Result<Value, ExecutionError> {
+    let body = input
+        .get("body")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| fail("http_body", "missing field 'body' in HTTP response"))?;
+    Ok(Value::String(body.to_string()))
+}
+
+pub fn http_status(input: &Value) -> Result<Value, ExecutionError> {
+    let status = input
+        .get("status")
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| fail("http_status", "missing field 'status' in HTTP response"))?;
+    Ok(json!(status))
+}
