@@ -6,11 +6,10 @@ use noether_engine::lagrange::{compute_composition_id, parse_graph};
 use noether_engine::planner::plan_graph;
 use noether_store::StageStore;
 use serde_json::json;
-use std::fs;
 
-pub fn cmd_run(store: &impl StageStore, graph_path: &str, dry_run: bool) {
+pub fn cmd_run(store: &impl StageStore, graph_path: &str, dry_run: bool, input: &serde_json::Value) {
     // 1. Read and parse
-    let content = match fs::read_to_string(graph_path) {
+    let content = match std::fs::read_to_string(graph_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!(
@@ -72,7 +71,7 @@ pub fn cmd_run(store: &impl StageStore, graph_path: &str, dry_run: bool) {
 
     // 4. Execute
     let executor = InlineExecutor::from_store(store);
-    match run_composition(&graph.root, &json!(null), &executor, &composition_id) {
+    match run_composition(&graph.root, input, &executor, &composition_id) {
         Ok(result) => {
             println!(
                 "{}",

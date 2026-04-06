@@ -1,4 +1,6 @@
-use super::stages::{find_implementation, StageFn};
+use super::stages::{
+    execute_executor_stage, find_implementation, is_executor_stage, StageFn,
+};
 use super::{ExecutionError, StageExecutor};
 use noether_core::stage::StageId;
 use noether_store::StageStore;
@@ -45,6 +47,7 @@ impl InlineExecutor {
         self.implementations.contains_key(&stage_id.0)
             || self.is_hof_stage(stage_id)
             || self.is_csv_stage(stage_id)
+            || self.is_executor_hof(stage_id)
     }
 
     fn description_of(&self, stage_id: &StageId) -> Option<&str> {
@@ -68,6 +71,12 @@ impl InlineExecutor {
             Some("Parse CSV text into a list of row maps")
                 | Some("Serialize a list of row maps to CSV text")
         )
+    }
+
+    fn is_executor_hof(&self, stage_id: &StageId) -> bool {
+        self.description_of(stage_id)
+            .map(is_executor_stage)
+            .unwrap_or(false)
     }
 
     fn execute_hof(&self, stage_id: &StageId, input: &Value) -> Result<Value, ExecutionError> {
@@ -283,6 +292,11 @@ impl StageExecutor for InlineExecutor {
         if self.is_hof_stage(stage_id) {
             return self.execute_hof(stage_id, input);
         }
+        // Executor-HOF stages (fallback, parallel_n) also need recursive access
+        if self.is_executor_hof(stage_id) {
+            let desc = self.description_of(stage_id).unwrap_or("");
+            return execute_executor_stage(self, desc, input);
+        }
         // CSV stages
         if self.is_csv_stage(stage_id) {
             return self.execute_csv(stage_id, input);
@@ -398,7 +412,8 @@ mod tests {
     fn fallback_for_unimplemented() {
         let store = init_store();
         let executor = InlineExecutor::from_store(&store);
-        let id = find_id(&store, "Make an HTTP GET request");
+        // LLM stages are still unimplemented (require external API credentials)
+        let id = find_id(&store, "Generate text completion using a language model");
         assert!(!executor.has_implementation(&id));
         let result = executor.execute(&id, &json!(null)).unwrap();
         assert!(result.is_object());

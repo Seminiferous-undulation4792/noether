@@ -52,10 +52,13 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
             .build_stdlib(key)
             .unwrap(),
         StageBuilder::new("sort")
-            .input(NType::record([
-                ("items", NType::List(Box::new(NType::Any))),
-                ("key", NType::optional(NType::Text)),
-                ("descending", NType::optional(NType::Bool)),
+            .input(NType::union(vec![
+                NType::List(Box::new(NType::Any)),
+                NType::record([
+                    ("items", NType::List(Box::new(NType::Any))),
+                    ("key", NType::optional(NType::Text)),
+                    ("descending", NType::optional(NType::Bool)),
+                ]),
             ]))
             .output(NType::List(Box::new(NType::Any)))
             .pure()
@@ -64,7 +67,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
             .example(json!({"items": [3, 1, 2], "key": null, "descending": true}), json!([3, 2, 1]))
             .example(json!({"items": ["b", "a", "c"], "key": null, "descending": null}), json!(["a", "b", "c"]))
             .example(json!({"items": [], "key": null, "descending": null}), json!([]))
-            .example(json!({"items": [1], "key": null, "descending": null}), json!([1]))
+            .example(json!([3, 1, 2]), json!([1, 2, 3]))
             .build_stdlib(key)
             .unwrap(),
         StageBuilder::new("group_by")

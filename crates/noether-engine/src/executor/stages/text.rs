@@ -1,5 +1,6 @@
 use crate::executor::ExecutionError;
 use noether_core::stage::StageId;
+use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -43,21 +44,29 @@ pub fn regex_match(input: &Value) -> Result<Value, ExecutionError> {
     let text = get_str(input, "text")?;
     let pattern = get_str(input, "pattern")?;
 
-    // Simple regex matching using string methods (no regex crate dependency)
-    // For a real implementation, we'd use the regex crate
-    // For now, support basic literal matching
-    if let Some(pos) = text.find(pattern) {
-        let matched = &text[pos..pos + pattern.len()];
+    let re = Regex::new(pattern).map_err(|e| ExecutionError::StageFailed {
+        stage_id: StageId("regex_match".into()),
+        message: format!("invalid regex: {e}"),
+    })?;
+
+    if let Some(caps) = re.captures(text) {
+        let full_match = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+        let groups: Vec<Value> = (1..caps.len())
+            .map(|i| match caps.get(i) {
+                Some(m) => json!(m.as_str()),
+                None => Value::Null,
+            })
+            .collect();
         Ok(json!({
             "matched": true,
-            "groups": [],
-            "full_match": matched,
+            "full_match": full_match,
+            "groups": groups,
         }))
     } else {
         Ok(json!({
             "matched": false,
-            "groups": [],
             "full_match": null,
+            "groups": [],
         }))
     }
 }
@@ -66,8 +75,12 @@ pub fn regex_replace(input: &Value) -> Result<Value, ExecutionError> {
     let text = get_str(input, "text")?;
     let pattern = get_str(input, "pattern")?;
     let replacement = get_str(input, "replacement")?;
-    // Simple string replacement (not full regex)
-    Ok(json!(text.replace(pattern, replacement)))
+
+    let re = Regex::new(pattern).map_err(|e| ExecutionError::StageFailed {
+        stage_id: StageId("regex_replace".into()),
+        message: format!("invalid regex: {e}"),
+    })?;
+    Ok(json!(re.replace_all(text, replacement).as_ref()))
 }
 
 pub fn text_template(input: &Value) -> Result<Value, ExecutionError> {
@@ -137,6 +150,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, json!("hello rust"));
+
+        let result = regex_replace(
+            &json!({"text": "hello   world   foo", "pattern": r"\s+", "replacement": " "}),
+        )
+        .unwrap();
+        assert_eq!(result, json!("hello world foo"));
+
+        let result = regex_replace(
+            &json!({"text": "abc123def456", "pattern": r"\d+", "replacement": "NUM"}),
+        )
+        .unwrap();
+        assert_eq!(result, json!("abcNUMdefNUM"));
+
+        assert!(regex_replace(
+            &json!({"text": "x", "pattern": "[invalid", "replacement": ""})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_regex_match() {
+        let result = regex_match(&json!({"text": "hello 42 world", "pattern": r"\d+"})).unwrap();
+        assert_eq!(result["matched"], true);
+        assert_eq!(result["full_match"], "42");
+
+        let result = regex_match(&json!({"text": "no digits here", "pattern": r"\d+"})).unwrap();
+        assert_eq!(result["matched"], false);
+
+        // Capture groups
+        let result =
+            regex_match(&json!({"text": "2026-04-06", "pattern": r"(\d{4})-(\d{2})-(\d{2})"}))
+                .unwrap();
+        assert_eq!(result["matched"], true);
+        assert_eq!(result["groups"][0], "2026");
+        assert_eq!(result["groups"][1], "04");
+        assert_eq!(result["groups"][2], "06");
     }
 
     #[test]

@@ -11,34 +11,28 @@ fn fail(stage: &str, msg: impl Into<String>) -> ExecutionError {
 }
 
 pub fn sort(input: &Value) -> Result<Value, ExecutionError> {
-    let items = input
-        .get("items")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| fail("sort", "items must be an array"))?;
-    let key = input.get("key").and_then(|v| v.as_str());
-    let descending = input
-        .get("descending")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    // Accept either a bare List<Any> or Record{items, key?, descending?}
+    let (items, key, descending) = if let Some(arr) = input.as_array() {
+        (arr, None, false)
+    } else {
+        let items = input
+            .get("items")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| fail("sort", "input must be an array or Record{items, key?, descending?}"))?;
+        let key = input.get("key").and_then(|v| v.as_str());
+        let descending = input
+            .get("descending")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        (items, key, descending)
+    };
 
     let mut sorted = items.clone();
     sorted.sort_by(|a, b| {
-        let va = if let Some(k) = key {
-            a.get(k).unwrap_or(a)
-        } else {
-            a
-        };
-        let vb = if let Some(k) = key {
-            b.get(k).unwrap_or(b)
-        } else {
-            b
-        };
+        let va = if let Some(k) = key { a.get(k).unwrap_or(a) } else { a };
+        let vb = if let Some(k) = key { b.get(k).unwrap_or(b) } else { b };
         let cmp = compare_values(va, vb);
-        if descending {
-            cmp.reverse()
-        } else {
-            cmp
-        }
+        if descending { cmp.reverse() } else { cmp }
     });
     Ok(Value::Array(sorted))
 }

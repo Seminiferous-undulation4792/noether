@@ -38,6 +38,9 @@ enum Commands {
         /// Verify and plan without executing
         #[arg(long)]
         dry_run: bool,
+        /// Input data as JSON string (default: null)
+        #[arg(long)]
+        input: Option<String>,
     },
     /// Retrieve execution trace for a past composition
     Trace {
@@ -107,10 +110,9 @@ fn init_store() -> JsonFileStore {
         JsonFileStore::open("/dev/null").unwrap()
     });
 
-    if store.is_empty() {
-        for stage in load_stdlib() {
-            let _ = store.put(stage);
-        }
+    // Always upsert stdlib stages so updates to stdlib are applied automatically.
+    for stage in load_stdlib() {
+        let _ = store.put(stage);
     }
 
     store
@@ -176,9 +178,13 @@ fn main() {
                 StoreCommands::Stats => commands::store::cmd_stats(&store),
             }
         }
-        Commands::Run { graph, dry_run } => {
+        Commands::Run { graph, dry_run, input } => {
             let store = init_store();
-            commands::run::cmd_run(&store, &graph, dry_run);
+            let input_value = input
+                .as_deref()
+                .map(|s| serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())))
+                .unwrap_or(serde_json::Value::Null);
+            commands::run::cmd_run(&store, &graph, dry_run, &input_value);
         }
         Commands::Trace { composition_id } => {
             let trace_store = init_trace_store();

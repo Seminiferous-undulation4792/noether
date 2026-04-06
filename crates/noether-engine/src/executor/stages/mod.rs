@@ -1,19 +1,22 @@
 pub mod collections;
+pub mod control;
 pub mod data;
+pub mod io;
 pub mod scalar;
 pub mod text;
 
-use super::ExecutionError;
+use super::{ExecutionError, StageExecutor};
+use noether_core::stage::StageId;
 use serde_json::Value;
 
 /// A stage implementation function.
 pub type StageFn = fn(&Value) -> Result<Value, ExecutionError>;
 
 /// Find the implementation for a stage by matching its description.
-/// Returns None for stages without real implementations (I/O, LLM, control, internal).
+/// Returns None for stages without real implementations (LLM, Arrow, internal).
 pub fn find_implementation(description: &str) -> Option<StageFn> {
-    // Scalar
     match description {
+        // Scalar
         "Convert any value to its text representation" => Some(scalar::to_text),
         "Parse a value as a number; fails on non-numeric text" => Some(scalar::to_number),
         "Convert a value to boolean using truthiness rules" => Some(scalar::to_bool),
@@ -48,6 +51,48 @@ pub fn find_implementation(description: &str) -> Option<StageFn> {
             Some(data::json_schema_validate)
         }
 
+        // Control (pure / stateless)
+        "Select between two values based on a boolean condition" => Some(control::branch),
+        "Check if one type is a structural subtype of another" => Some(control::is_subtype),
+
+        // I/O
+        "Read a file's contents as text" => Some(io::read_file),
+        "Write text content to a file" => Some(io::write_file),
+        "Write text to standard output" => Some(io::stdout_write),
+        "Read all available text from standard input" => Some(io::stdin_read),
+        "Read an environment variable; returns null if not set" => Some(io::env_get),
+        "Make an HTTP GET request" => Some(io::http_get),
+        "Make an HTTP POST request" => Some(io::http_post),
+        "Make an HTTP PUT request" => Some(io::http_put),
+
         _ => None,
+    }
+}
+
+/// HOF and control stages that need access to the executor itself.
+/// Returns true if the stage should be routed through execute_hof_extended.
+pub fn is_executor_stage(description: &str) -> bool {
+    matches!(
+        description,
+        "Try stages in order until one succeeds; fails if all fail"
+            | "Run N stages concurrently on N inputs; collect all results"
+    )
+}
+
+pub fn execute_executor_stage<E: StageExecutor>(
+    executor: &E,
+    description: &str,
+    input: &Value,
+) -> Result<Value, ExecutionError> {
+    match description {
+        "Try stages in order until one succeeds; fails if all fail" => {
+            control::fallback(executor, input)
+        }
+        "Run N stages concurrently on N inputs; collect all results" => {
+            control::parallel_n(executor, input)
+        }
+        _ => Err(ExecutionError::StageNotFound(StageId(
+            "unknown".into(),
+        ))),
     }
 }
