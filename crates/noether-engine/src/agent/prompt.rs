@@ -40,7 +40,11 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("- **Fanout**: `{\"op\": \"Fanout\", \"source\": A, \"targets\": [B, C]}`\n");
     prompt.push_str("- **Retry**: `{\"op\": \"Retry\", \"stage\": A, \"max_attempts\": 3, \"delay_ms\": 500}`\n\n");
 
-    // --- Few-shot example ---
+    // --- Few-shot example using real IDs when available ---
+    // Look for parse_json and to_json in candidates so the example uses actual hashes.
+    let parse_json_id = find_candidate_id(candidates, "Parse a JSON string");
+    let to_json_id = find_candidate_id(candidates, "Serialize any value to a JSON");
+
     prompt.push_str("## EXAMPLE: Multi-stage composition\n\n");
     prompt.push_str("Problem: \"Parse a JSON string and serialize it back\"\n\n");
     prompt.push_str("The stage `parse_json` has input `Text` and output `Any`.\n");
@@ -53,18 +57,28 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("  \"root\": {\n");
     prompt.push_str("    \"op\": \"Sequential\",\n");
     prompt.push_str("    \"stages\": [\n");
-    prompt.push_str("      {\"op\": \"Stage\", \"id\": \"PARSE_JSON_ID\"},\n");
-    prompt.push_str("      {\"op\": \"Stage\", \"id\": \"TO_JSON_ID\"}\n");
+    prompt.push_str(&format!(
+        "      {{\"op\": \"Stage\", \"id\": \"{}\"}},\n",
+        parse_json_id
+    ));
+    prompt.push_str(&format!(
+        "      {{\"op\": \"Stage\", \"id\": \"{}\"}}\n",
+        to_json_id
+    ));
     prompt.push_str("    ]\n");
     prompt.push_str("  }\n");
     prompt.push_str("}\n");
     prompt.push_str("```\n\n");
 
-    // --- Available stages with examples ---
+    // --- Available stages with examples, ordered by relevance score ---
     prompt.push_str("## Available Stages\n\n");
+    prompt.push_str("Stages are listed by relevance to your problem (highest first).\n\n");
 
-    for (_result, stage) in candidates {
-        prompt.push_str(&format!("### `{}` — {}\n", stage.id.0, stage.description));
+    for (result, stage) in candidates {
+        prompt.push_str(&format!(
+            "### `{}` — {} _(relevance: {:.2})_\n",
+            stage.id.0, stage.description, result.score
+        ));
         prompt.push_str(&format!(
             "- **Input**: `{}`\n- **Output**: `{}`\n",
             stage.signature.input, stage.signature.output,
@@ -91,6 +105,17 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("```\n");
 
     prompt
+}
+
+/// Search `candidates` for a stage whose description contains `needle`
+/// and return its ID. Falls back to `<needle>` as a labelled placeholder
+/// so the few-shot example is always syntactically valid JSON.
+fn find_candidate_id(candidates: &[(&SearchResult, &Stage)], needle: &str) -> String {
+    candidates
+        .iter()
+        .find(|(_, s)| s.description.contains(needle))
+        .map(|(_, s)| s.id.0.clone())
+        .unwrap_or_else(|| format!("<{needle}>"))
 }
 
 /// Extract JSON from an LLM response that may contain markdown code blocks.
@@ -127,6 +152,18 @@ pub fn extract_json(response: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::SearchResult;
+    use noether_core::stage::StageId;
+
+    fn make_search_result(id: &str, score: f32) -> SearchResult {
+        SearchResult {
+            stage_id: StageId(id.into()),
+            score,
+            signature_score: score,
+            semantic_score: score,
+            example_score: score,
+        }
+    }
 
     #[test]
     fn extract_json_from_code_block() {
@@ -156,5 +193,66 @@ mod tests {
     fn extract_json_with_whitespace() {
         let response = "  \n```json\n  {\"a\": 1}  \n```\n  ";
         assert_eq!(extract_json(response), Some("{\"a\": 1}"));
+    }
+
+    #[test]
+    fn few_shot_uses_real_ids_when_candidates_present() {
+        use noether_core::stdlib::load_stdlib;
+
+        let stages = load_stdlib();
+        let parse_json = stages
+            .iter()
+            .find(|s| s.description.contains("Parse a JSON string"))
+            .unwrap();
+        let to_json = stages
+            .iter()
+            .find(|s| s.description.contains("Serialize any value to a JSON"))
+            .unwrap();
+
+        let r1 = make_search_result(&parse_json.id.0, 0.9);
+        let r2 = make_search_result(&to_json.id.0, 0.8);
+        let candidates: Vec<(&SearchResult, &Stage)> = vec![(&r1, parse_json), (&r2, to_json)];
+
+        let prompt = build_system_prompt(&candidates);
+
+        // The few-shot example must contain the real hashes, not placeholders.
+        assert!(
+            prompt.contains(&parse_json.id.0),
+            "prompt should contain real parse_json hash"
+        );
+        assert!(
+            prompt.contains(&to_json.id.0),
+            "prompt should contain real to_json hash"
+        );
+        assert!(
+            !prompt.contains("PARSE_JSON_ID") && !prompt.contains("TO_JSON_ID"),
+            "prompt must not contain placeholder IDs"
+        );
+    }
+
+    #[test]
+    fn few_shot_falls_back_to_placeholder_when_stages_absent() {
+        let prompt = build_system_prompt(&[]);
+        // With no candidates the fallback label appears (angle-bracket wrapped needle text).
+        assert!(
+            prompt.contains("<Parse a JSON string>"),
+            "expected placeholder when parse_json not in candidates"
+        );
+    }
+
+    #[test]
+    fn candidates_show_relevance_score() {
+        use noether_core::stdlib::load_stdlib;
+
+        let stages = load_stdlib();
+        let stage = stages.first().unwrap();
+        let r = make_search_result(&stage.id.0, 0.75);
+        let candidates: Vec<(&SearchResult, &Stage)> = vec![(&r, stage)];
+
+        let prompt = build_system_prompt(&candidates);
+        assert!(
+            prompt.contains("relevance: 0.75"),
+            "prompt should display the fused relevance score"
+        );
     }
 }
