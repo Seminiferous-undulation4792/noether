@@ -1,0 +1,88 @@
+use crate::output::{acli_error, acli_ok};
+use noether_engine::agent::CompositionAgent;
+use noether_engine::checker::check_graph;
+use noether_engine::executor::inline::InlineExecutor;
+use noether_engine::executor::runner::run_composition;
+use noether_engine::index::SemanticIndex;
+use noether_engine::lagrange::{compute_composition_id, serialize_graph};
+use noether_engine::llm::{LlmConfig, LlmProvider};
+use noether_engine::planner::plan_graph;
+use noether_store::StageStore;
+use serde_json::json;
+
+pub fn cmd_compose(
+    store: &dyn StageStore,
+    index: &SemanticIndex,
+    llm: &dyn LlmProvider,
+    problem: &str,
+    model: &str,
+    dry_run: bool,
+    input: &serde_json::Value,
+) {
+    let llm_config = LlmConfig {
+        model: model.into(),
+        max_tokens: 4096,
+        temperature: 0.2,
+    };
+
+    let agent = CompositionAgent::new(index, llm, llm_config, 3);
+
+    let result = match agent.compose(problem, store) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{}", acli_error(&format!("composition failed: {e}")));
+            std::process::exit(2);
+        }
+    };
+
+    let graph = &result.graph;
+    let composition_id = compute_composition_id(graph).unwrap_or_else(|_| "unknown".into());
+    let graph_json = serialize_graph(graph).unwrap_or_else(|_| "{}".into());
+
+    // Type check (should pass since agent validates, but confirm)
+    let resolved = check_graph(&graph.root, store).ok();
+    let plan = plan_graph(&graph.root, store);
+
+    if dry_run {
+        println!(
+            "{}",
+            acli_ok(json!({
+                "mode": "dry-run",
+                "composition_id": composition_id,
+                "attempts": result.attempts,
+                "graph": serde_json::from_str::<serde_json::Value>(&graph_json).unwrap_or(json!(null)),
+                "type_check": resolved.as_ref().map(|r| json!({
+                    "input": format!("{}", r.input),
+                    "output": format!("{}", r.output),
+                })),
+                "plan": {
+                    "steps": plan.steps.len(),
+                    "parallel_groups": plan.parallel_groups.len(),
+                    "cost": plan.cost,
+                },
+            }))
+        );
+        return;
+    }
+
+    // Execute with inline executor
+    let executor = InlineExecutor::from_store(store);
+    match run_composition(&graph.root, input, &executor, &composition_id) {
+        Ok(exec_result) => {
+            println!(
+                "{}",
+                acli_ok(json!({
+                    "composition_id": composition_id,
+                    "attempts": result.attempts,
+                    "graph": serde_json::from_str::<serde_json::Value>(&graph_json).unwrap_or(json!(null)),
+                    "output": exec_result.output,
+                    "trace": exec_result.trace,
+                }))
+            );
+        }
+        Err(e) => {
+            eprintln!("{}", acli_error(&format!("execution failed: {e}")));
+            std::process::exit(3);
+        }
+    }
+}

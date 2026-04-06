@@ -1,0 +1,16 @@
+[package]
+name = "noether-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "noether"
+path = "src/main.rs"
+
+[dependencies]
+noether-core = { path = "../noether-core" }
+noether-store = { path = "../noether-store" }
+noether-engine = { path = "../noether-engine" }
+acli = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "noether-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+noether-core = { path = "../noether-core" }
+noether-store = { path = "../noether-store" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
