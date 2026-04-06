@@ -1,6 +1,41 @@
 use crate::index::SearchResult;
 use noether_core::stage::Stage;
+use noether_core::types::NType;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+// ── Synthesis types ────────────────────────────────────────────────────────
+
+/// Specification for a stage the Composition Agent wants synthesized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SynthesisSpec {
+    pub name: String,
+    pub description: String,
+    pub input: NType,
+    pub output: NType,
+    pub rationale: String,
+}
+
+/// Code + examples returned by the synthesis codegen LLM call.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SynthesisResponse {
+    pub examples: Vec<SynthesisExample>,
+    pub implementation: String,
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SynthesisExample {
+    pub input: Value,
+    pub output: Value,
+}
+
+fn default_language() -> String {
+    "python".into()
+}
+
+// ── Prompt builders ────────────────────────────────────────────────────────
 /// Build the system prompt for the Composition Agent.
 pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     let mut prompt = String::new();
@@ -39,6 +74,25 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     );
     prompt.push_str("- **Fanout**: `{\"op\": \"Fanout\", \"source\": A, \"targets\": [B, C]}`\n");
     prompt.push_str("- **Retry**: `{\"op\": \"Retry\", \"stage\": A, \"max_attempts\": 3, \"delay_ms\": 500}`\n\n");
+
+    // --- Synthesis option (last resort) ---
+    prompt.push_str("## If You Need a New Stage\n\n");
+    prompt.push_str("If—and only if—no combination of existing stages can solve the problem, output a synthesis request instead of a graph:\n\n");
+    prompt.push_str("```json\n");
+    prompt.push_str("{\n");
+    prompt.push_str("  \"action\": \"synthesize\",\n");
+    prompt.push_str("  \"spec\": {\n");
+    prompt.push_str("    \"name\": \"snake_case_stage_name\",\n");
+    prompt.push_str("    \"description\": \"One-sentence description of what this stage does\",\n");
+    prompt.push_str("    \"input\": {\"kind\": \"Text\"},\n");
+    prompt.push_str("    \"output\": {\"kind\": \"Number\"},\n");
+    prompt.push_str("    \"rationale\": \"Why no available stage satisfies this\"\n");
+    prompt.push_str("  }\n");
+    prompt.push_str("}\n");
+    prompt.push_str("```\n\n");
+    prompt.push_str("NType JSON format: `{\"kind\":\"Text\"}`, `{\"kind\":\"Number\"}`, `{\"kind\":\"Bool\"}`, `{\"kind\":\"Any\"}`, `{\"kind\":\"Null\"}`, ");
+    prompt.push_str("`{\"kind\":\"List\",\"value\":<T>}`, `{\"kind\":\"Record\",\"value\":{\"field\":<T>,...}}`, `{\"kind\":\"Union\",\"value\":[<T>,...]}` \n\n");
+    prompt.push_str("**Always prefer composing existing stages. Only use synthesis if composition is genuinely impossible.**\n\n");
 
     // --- Few-shot example using real IDs when available ---
     // Look for parse_json and to_json in candidates so the example uses actual hashes.
@@ -118,7 +172,62 @@ fn find_candidate_id(candidates: &[(&SearchResult, &Stage)], needle: &str) -> St
         .unwrap_or_else(|| format!("<{needle}>"))
 }
 
-/// Extract JSON from an LLM response that may contain markdown code blocks.
+/// Build the codegen prompt that asks the LLM to implement a synthesized stage.
+pub fn build_synthesis_prompt(spec: &SynthesisSpec) -> String {
+    let mut p = String::new();
+    p.push_str(
+        "You are generating a stage implementation for the Noether composition platform.\n\n",
+    );
+    p.push_str("## Stage Specification\n\n");
+    p.push_str(&format!("- **Name**: `{}`\n", spec.name));
+    p.push_str(&format!("- **Description**: {}\n", spec.description));
+    p.push_str(&format!("- **Input type**: `{}`\n", spec.input));
+    p.push_str(&format!("- **Output type**: `{}`\n\n", spec.output));
+
+    p.push_str("## Your Task\n\n");
+    p.push_str(
+        "1. Produce at least 3 concrete input/output example pairs matching the type signature.\n",
+    );
+    p.push_str("2. Write a Python function `execute(input_value)` that implements this stage.\n");
+    p.push_str(
+        "   `input_value` is a Python dict/str/number/list/bool/None matching the input type.\n",
+    );
+    p.push_str("   Return a value matching the output type.\n\n");
+
+    p.push_str("## Output Format\n\n");
+    p.push_str("Respond with ONLY this JSON (no other text):\n");
+    p.push_str("```json\n");
+    p.push_str("{\n");
+    p.push_str("  \"examples\": [\n");
+    p.push_str("    {\"input\": <value>, \"output\": <value>},\n");
+    p.push_str("    {\"input\": <value>, \"output\": <value>},\n");
+    p.push_str("    {\"input\": <value>, \"output\": <value>}\n");
+    p.push_str("  ],\n");
+    p.push_str("  \"implementation\": \"def execute(input_value):\\n    ...\",\n");
+    p.push_str("  \"language\": \"python\"\n");
+    p.push_str("}\n");
+    p.push_str("```\n");
+    p
+}
+
+/// Try to parse a synthesis request from the LLM response.
+/// Returns `Some(SynthesisSpec)` only when the JSON contains `"action": "synthesize"`.
+pub fn extract_synthesis_spec(response: &str) -> Option<SynthesisSpec> {
+    let json_str = extract_json(response)?;
+    let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    if v.get("action").and_then(|a| a.as_str()) != Some("synthesize") {
+        return None;
+    }
+    let spec = v.get("spec")?;
+    serde_json::from_value(spec.clone()).ok()
+}
+
+/// Try to parse a synthesis response (examples + implementation) from the LLM.
+pub fn extract_synthesis_response(response: &str) -> Option<SynthesisResponse> {
+    let json_str = extract_json(response)?;
+    serde_json::from_str(json_str).ok()
+}
+
 pub fn extract_json(response: &str) -> Option<&str> {
     // Try to find ```json ... ``` block
     if let Some(start) = response.find("```json") {
@@ -193,6 +302,59 @@ mod tests {
     fn extract_json_with_whitespace() {
         let response = "  \n```json\n  {\"a\": 1}  \n```\n  ";
         assert_eq!(extract_json(response), Some("{\"a\": 1}"));
+    }
+
+    #[test]
+    fn extract_synthesis_spec_parses_valid_request() {
+        let input_json = serde_json::to_string(&NType::Text).unwrap();
+        let output_json = serde_json::to_string(&NType::Number).unwrap();
+        let response = format!(
+            "```json\n{}\n```",
+            serde_json::json!({
+                "action": "synthesize",
+                "spec": {
+                    "name": "count_words",
+                    "description": "Count the number of words in a text",
+                    "input": serde_json::from_str::<serde_json::Value>(&input_json).unwrap(),
+                    "output": serde_json::from_str::<serde_json::Value>(&output_json).unwrap(),
+                    "rationale": "No existing stage counts words"
+                }
+            })
+        );
+        let spec = extract_synthesis_spec(&response).unwrap();
+        assert_eq!(spec.name, "count_words");
+        assert_eq!(spec.input, NType::Text);
+        assert_eq!(spec.output, NType::Number);
+    }
+
+    #[test]
+    fn extract_synthesis_spec_returns_none_for_composition_graph() {
+        let response = "```json\n{\"description\":\"test\",\"version\":\"0.1.0\",\"root\":{\"op\":\"Stage\",\"id\":\"abc\"}}\n```";
+        assert!(extract_synthesis_spec(response).is_none());
+    }
+
+    #[test]
+    fn extract_synthesis_response_parses_examples_and_code() {
+        let response = "```json\n{\"examples\":[{\"input\":\"hello world\",\"output\":2},{\"input\":\"foo\",\"output\":1}],\"implementation\":\"def execute(v): return len(v.split())\",\"language\":\"python\"}\n```";
+        let resp = extract_synthesis_response(response).unwrap();
+        assert_eq!(resp.examples.len(), 2);
+        assert_eq!(resp.language, "python");
+        assert!(resp.implementation.contains("execute"));
+    }
+
+    #[test]
+    fn build_synthesis_prompt_contains_spec_fields() {
+        let spec = SynthesisSpec {
+            name: "reverse_text".into(),
+            description: "Reverse a string".into(),
+            input: NType::Text,
+            output: NType::Text,
+            rationale: "no existing stage reverses text".into(),
+        };
+        let prompt = build_synthesis_prompt(&spec);
+        assert!(prompt.contains("reverse_text"));
+        assert!(prompt.contains("Reverse a string"));
+        assert!(prompt.contains("execute(input_value)"));
     }
 
     #[test]

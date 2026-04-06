@@ -190,8 +190,8 @@ fn main() {
             dry_run,
             input,
         } => {
-            let store = init_store();
-            let index = build_index(&store);
+            let mut store = init_store();
+            let mut index = build_index(&store);
             let (llm, llm_name) = providers::build_llm_provider();
             if llm_name != "mock" {
                 eprintln!("LLM provider: {llm_name}");
@@ -202,8 +202,8 @@ fn main() {
                 .map(|s| serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())))
                 .unwrap_or(serde_json::Value::Null);
             commands::compose::cmd_compose(
-                &store,
-                &index,
+                &mut store,
+                &mut index,
                 llm.as_ref(),
                 &problem,
                 &model,

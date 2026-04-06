@@ -90,6 +90,32 @@ impl LlmProvider for MockLlmProvider {
     }
 }
 
+/// Mock LLM provider that returns responses from a queue.
+/// When the queue is exhausted, returns the fallback response.
+/// Useful for testing multi-step flows like synthesis (compose → codegen → recompose).
+pub struct SequenceMockLlmProvider {
+    responses: std::sync::Mutex<std::collections::VecDeque<String>>,
+    fallback: String,
+}
+
+impl SequenceMockLlmProvider {
+    pub fn new(responses: Vec<impl Into<String>>, fallback: impl Into<String>) -> Self {
+        Self {
+            responses: std::sync::Mutex::new(
+                responses.into_iter().map(|s| s.into()).collect(),
+            ),
+            fallback: fallback.into(),
+        }
+    }
+}
+
+impl LlmProvider for SequenceMockLlmProvider {
+    fn complete(&self, _messages: &[Message], _config: &LlmConfig) -> Result<String, LlmError> {
+        let mut queue = self.responses.lock().unwrap();
+        Ok(queue.pop_front().unwrap_or_else(|| self.fallback.clone()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

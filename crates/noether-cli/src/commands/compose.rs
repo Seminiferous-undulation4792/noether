@@ -11,8 +11,8 @@ use noether_store::StageStore;
 use serde_json::json;
 
 pub fn cmd_compose(
-    store: &dyn StageStore,
-    index: &SemanticIndex,
+    store: &mut dyn StageStore,
+    index: &mut SemanticIndex,
     llm: &dyn LlmProvider,
     problem: &str,
     model: &str,
@@ -25,7 +25,7 @@ pub fn cmd_compose(
         temperature: 0.2,
     };
 
-    let agent = CompositionAgent::new(index, llm, llm_config, 3);
+    let mut agent = CompositionAgent::new(index, llm, llm_config, 3);
 
     let result = match agent.compose(problem, store) {
         Ok(r) => r,
@@ -39,6 +39,19 @@ pub fn cmd_compose(
     let composition_id = compute_composition_id(graph).unwrap_or_else(|_| "unknown".into());
     let graph_json = serialize_graph(graph).unwrap_or_else(|_| "{}".into());
 
+    let synthesized_json: Vec<serde_json::Value> = result
+        .synthesized
+        .iter()
+        .map(|s| {
+            json!({
+                "stage_id": s.stage_id.0,
+                "language": s.language,
+                "attempts": s.attempts,
+                "is_new": s.is_new,
+            })
+        })
+        .collect();
+
     // Type check (should pass since agent validates, but confirm)
     let resolved = check_graph(&graph.root, store).ok();
     let plan = plan_graph(&graph.root, store);
@@ -50,6 +63,7 @@ pub fn cmd_compose(
                 "mode": "dry-run",
                 "composition_id": composition_id,
                 "attempts": result.attempts,
+                "synthesized": synthesized_json,
                 "graph": serde_json::from_str::<serde_json::Value>(&graph_json).unwrap_or(json!(null)),
                 "type_check": resolved.as_ref().map(|r| json!({
                     "input": format!("{}", r.input),
@@ -74,6 +88,7 @@ pub fn cmd_compose(
                 acli_ok(json!({
                     "composition_id": composition_id,
                     "attempts": result.attempts,
+                    "synthesized": synthesized_json,
                     "graph": serde_json::from_str::<serde_json::Value>(&graph_json).unwrap_or(json!(null)),
                     "output": exec_result.output,
                     "trace": exec_result.trace,
