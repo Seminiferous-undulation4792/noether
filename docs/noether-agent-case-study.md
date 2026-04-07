@@ -267,4 +267,4 @@ LLM: mistral-small-2503 on Vertex AI europe-west4. Platform: Noether 0.1.0. Stor
 
 ---
 
-*Noether 0.1.0 · github.com/solv/noether · Named after Emmy Noether: type signature symmetry guarantees composition correctness.*
+*Noether 0.1.0 · [github.com/alpibrusl/noether](https://github.com/alpibrusl/noether) · Named after Emmy Noether: type signature symmetry guarantees composition correctness.*
