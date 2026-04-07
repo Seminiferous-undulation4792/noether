@@ -1,6 +1,11 @@
 # Composition Graphs (Lagrange JSON)
 
-A composition graph is a JSON document that describes how stages connect. Noether calls this format **Lagrange**.
+A composition graph is a JSON document that describes how stages connect.
+Noether calls this format **Lagrange** — named after Joseph-Louis Lagrange,
+whose formalism (the Lagrangian) is central to [Emmy Noether's theorem](../architecture/composition-engine.md#why-lagrange):
+just as the Lagrangian describes a physical system and Noether's theorem derives
+its conservation laws, a Lagrange graph describes a computation and Noether's
+type checker derives its correctness guarantees.
 
 ## Operators
 

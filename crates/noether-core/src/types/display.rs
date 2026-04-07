@@ -32,6 +32,7 @@ impl fmt::Display for NType {
                 }
                 Ok(())
             }
+            NType::VNode => write!(f, "VNode"),
         }
     }
 }
@@ -71,5 +72,10 @@ mod tests {
     fn display_nested() {
         let t = NType::List(Box::new(NType::record([("x", NType::Number)])));
         assert_eq!(format!("{t}"), "List<Record { x: Number }>");
+    }
+
+    #[test]
+    fn display_vnode() {
+        assert_eq!(format!("{}", NType::VNode), "VNode");
     }
 }

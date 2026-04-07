@@ -137,6 +137,12 @@ The ID never changes unless the type signature or implementation changes.
 
 ## Composition graph (Lagrange format)
 
+> **Why "Lagrange"?** The project is named after Emmy Noether, whose theorem
+> connects symmetries to conservation laws via the *Lagrangian* (named after
+> Joseph-Louis Lagrange). A Lagrange graph is what you write down to describe
+> a computation; Noether's type system guarantees its correctness — the same
+> relationship as Lagrangian ↔ conservation law.
+
 ```json
 {
   "description": "Research digest pipeline",

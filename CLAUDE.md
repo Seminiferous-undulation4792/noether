@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Noether has completed **Phases 0–3** (Foundation, Store + Stdlib, Composition Engine, Agent Interface). The full design spec is in `noether_roadmap.md`.
+Noether has completed **Phases 0–3** (Foundation, Store + Stdlib, Composition Engine, Agent Interface). The full design spec is in `docs/roadmap.md`.
 
 ## Build & Test Commands
 

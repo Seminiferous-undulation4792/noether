@@ -20,6 +20,12 @@ pub enum NType {
     Stream(Box<NType>),
     Text,
     Union(Vec<NType>),
+    /// A virtual DOM node — the output type for UI component stages.
+    ///
+    /// VNode is opaque in the type system: it does not expose its internal
+    /// tag/props/children structure as sub-types. The JS reactive runtime owns
+    /// VNode semantics; the type checker only needs to know a VNode is a VNode.
+    VNode,
 }
 
 impl NType {
@@ -116,11 +122,18 @@ mod tests {
             NType::union(vec![NType::Text, NType::Null]),
             NType::Stream(Box::new(NType::Bool)),
             NType::Any,
+            NType::VNode,
         ];
         for t in types {
             let json = serde_json::to_string(&t).unwrap();
             let deserialized: NType = serde_json::from_str(&json).unwrap();
             assert_eq!(t, deserialized);
         }
+    }
+
+    #[test]
+    fn vnode_ord_after_union() {
+        // VNode sorts after Union alphabetically, which keeps Ord stable.
+        assert!(NType::VNode > NType::Union(vec![NType::Text]));
     }
 }

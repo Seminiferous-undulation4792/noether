@@ -90,7 +90,9 @@ nav:
     - Remote Registry (noether-cloud): guides/remote-registry.md
   - Case Studies:
     - Four Search Engines: case-studies/search-engines.md
+    - Interactive Case Study: case-studies/noether-case-study.html
     - Benchmark: case-studies/benchmark.md
+  - Roadmap: roadmap.md
   - Research:
     - NoetherReact: research/noether-react.md
     - WASM Target: research/wasm-target.md

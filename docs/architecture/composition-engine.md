@@ -4,6 +4,19 @@ The composition engine sits between the stage store (L2) and the agent interface
 It takes a Lagrange graph, verifies it is type-safe, plans execution order, runs it,
 and produces a structured trace.
 
+## Why "Lagrange"?
+
+The project is named after **Emmy Noether**, whose theorem connects symmetries in a
+physical system to conservation laws.  In Noether's theorem, the symmetry is expressed
+in the **Lagrangian** — a function named after **Joseph-Louis Lagrange**.
+
+The composition graph format inherits that name: just as the Lagrangian is the object
+you write down to describe a system and Noether's theorem guarantees its conservation
+laws, the Lagrange graph is what you write down to describe a computation and Noether's
+type system guarantees its correctness.
+
+In practice: **a Lagrange graph is a JSON DAG of stages connected by typed edges.**
+
 ---
 
 ## Pipeline

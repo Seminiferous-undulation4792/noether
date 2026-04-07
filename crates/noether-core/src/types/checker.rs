@@ -86,7 +86,7 @@ pub fn is_subtype_of(sub: &NType, sup: &NType) -> TypeCompatibility {
 
     match (sub, sup) {
         // Identical primitives
-        (Text, Text) | (Number, Number) | (Bool, Bool) | (Bytes, Bytes) | (Null, Null) => {
+        (Text, Text) | (Number, Number) | (Bool, Bool) | (Bytes, Bytes) | (Null, Null) | (VNode, VNode) => {
             Compatible
         }
 
@@ -337,5 +337,23 @@ mod tests {
             }
             TypeCompatibility::Compatible => panic!("expected incompatible"),
         }
+    }
+
+    #[test]
+    fn vnode_is_subtype_of_vnode() {
+        assert!(compatible(&NType::VNode, &NType::VNode));
+    }
+
+    #[test]
+    fn vnode_is_subtype_of_any() {
+        assert!(compatible(&NType::VNode, &NType::Any));
+        assert!(compatible(&NType::Any, &NType::VNode));
+    }
+
+    #[test]
+    fn vnode_is_not_compatible_with_other_types() {
+        assert!(!compatible(&NType::VNode, &NType::Text));
+        assert!(!compatible(&NType::VNode, &NType::Record(Default::default())));
+        assert!(!compatible(&NType::Text, &NType::VNode));
     }
 }

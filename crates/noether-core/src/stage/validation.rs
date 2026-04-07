@@ -59,6 +59,10 @@ pub fn infer_type_with_hint(value: &serde_json::Value, hint: Option<&NType>) -> 
             }
         }
         Value::Object(map) => {
+            // If the hint says VNode, and the value has a "tag" key, treat as VNode
+            if matches!(hint, Some(NType::VNode)) {
+                return NType::VNode;
+            }
             // If the hint says Map<K,V>, infer as Map rather than Record
             if let Some(NType::Map { value: hint_v, .. }) = hint {
                 let value_types: Vec<NType> = map

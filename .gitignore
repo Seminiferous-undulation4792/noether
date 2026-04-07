@@ -12,5 +12,8 @@ result
 # Dev-internal AI assistant context (not relevant to contributors)
 CLAUDE.md
 
+# VS Code / Cursor workspace files (may reference private repos)
+*.code-workspace
+
 # Local data directory (never commit store/keys/DB)
 .noether/
