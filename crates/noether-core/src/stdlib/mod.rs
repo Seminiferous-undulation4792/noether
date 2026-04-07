@@ -3,6 +3,7 @@ mod control;
 mod data;
 mod internal;
 mod io;
+mod kv;
 mod llm;
 mod scalar;
 mod text;
@@ -18,7 +19,7 @@ pub fn stdlib_signing_key() -> SigningKey {
     SigningKey::from_bytes(&seed.into())
 }
 
-/// Load all 50 stdlib stages, signed and ready for store insertion.
+/// Load all stdlib stages, signed and ready for store insertion.
 pub fn load_stdlib() -> Vec<Stage> {
     let key = stdlib_signing_key();
     let mut stages = Vec::new();
@@ -30,6 +31,7 @@ pub fn load_stdlib() -> Vec<Stage> {
     stages.extend(data::stages(&key));
     stages.extend(internal::stages(&key));
     stages.extend(text::stages(&key));
+    stages.extend(kv::stages(&key));
     stages
 }
 
@@ -40,7 +42,7 @@ mod tests {
     #[test]
     fn load_stdlib_returns_50_stages() {
         let stages = load_stdlib();
-        assert_eq!(stages.len(), 65);
+        assert_eq!(stages.len(), 70); // 65 + 5 KV stages
     }
 
     #[test]

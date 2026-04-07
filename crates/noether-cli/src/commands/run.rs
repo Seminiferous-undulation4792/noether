@@ -1,5 +1,7 @@
-use crate::output::{acli_error, acli_ok};
-use noether_engine::checker::check_graph;
+use crate::output::{acli_error, acli_error_hints, acli_ok};
+use noether_engine::checker::{
+    check_capabilities, check_graph, collect_effect_warnings, verify_signatures, CapabilityPolicy,
+};
 use noether_engine::executor::composite::CompositeExecutor;
 use noether_engine::executor::runner::run_composition;
 use noether_engine::lagrange::{compute_composition_id, parse_graph};
@@ -12,6 +14,9 @@ pub fn cmd_run(
     graph_path: &str,
     dry_run: bool,
     input: &serde_json::Value,
+    policy: &CapabilityPolicy,
+    // Maximum total cost in cents. `None` = no limit.
+    budget_cents: Option<u64>,
 ) {
     // 1. Read and parse
     let content = match std::fs::read_to_string(graph_path) {
@@ -48,10 +53,62 @@ pub fn cmd_run(
         );
         std::process::exit(2);
     }
-    let resolved = type_result.unwrap();
+    let check = type_result.unwrap();
 
-    // 3. Plan
+    // 3. Capability pre-flight
+    let violations = check_capabilities(&graph.root, store, policy);
+    if !violations.is_empty() {
+        let msgs: Vec<String> = violations.iter().map(|v| format!("{v}")).collect();
+        eprintln!(
+            "{}",
+            acli_error_hints(
+                &format!("{} capability violation(s)", msgs.len()),
+                None,
+                Some(msgs),
+            )
+        );
+        std::process::exit(2);
+    }
+
+    // 4. Signature verification pre-flight
+    let sig_violations = verify_signatures(&graph.root, store);
+    if !sig_violations.is_empty() {
+        let msgs: Vec<String> = sig_violations.iter().map(|v| format!("{v}")).collect();
+        eprintln!(
+            "{}",
+            acli_error_hints(
+                &format!("{} signature violation(s)", msgs.len()),
+                None,
+                Some(msgs),
+            )
+        );
+        std::process::exit(2);
+    }
+
+    // 5. Effect warnings (includes budget enforcement if requested)
+    let effect_warnings = collect_effect_warnings(&graph.root, store, budget_cents);
+    let budget_errors: Vec<String> = effect_warnings
+        .iter()
+        .filter(|w| {
+            matches!(
+                w,
+                noether_engine::checker::EffectWarning::CostBudgetExceeded { .. }
+            )
+        })
+        .map(|w| format!("{w}"))
+        .collect();
+    if !budget_errors.is_empty() {
+        eprintln!(
+            "{}",
+            acli_error_hints("composition exceeds cost budget", None, Some(budget_errors))
+        );
+        std::process::exit(2);
+    }
+
+    // 6. Plan
     let plan = plan_graph(&graph.root, store);
+
+    let warning_strings: Vec<String> = effect_warnings.iter().map(|w| format!("{w}")).collect();
 
     if dry_run {
         println!(
@@ -61,20 +118,21 @@ pub fn cmd_run(
                 "composition_id": composition_id,
                 "description": graph.description,
                 "type_check": {
-                    "input": format!("{}", resolved.input),
-                    "output": format!("{}", resolved.output),
+                    "input": format!("{}", check.resolved.input),
+                    "output": format!("{}", check.resolved.output),
                 },
                 "plan": {
                     "steps": plan.steps.len(),
                     "parallel_groups": plan.parallel_groups.len(),
                     "cost": plan.cost,
                 },
+                "warnings": warning_strings,
             }))
         );
         return;
     }
 
-    // 4. Execute — use CompositeExecutor so synthesized stages run via Nix.
+    // 5. Execute — use CompositeExecutor so synthesized stages run via Nix.
     let executor = CompositeExecutor::from_store(store);
     match run_composition(&graph.root, input, &executor, &composition_id) {
         Ok(result) => {
@@ -84,6 +142,7 @@ pub fn cmd_run(
                     "composition_id": composition_id,
                     "output": result.output,
                     "trace": result.trace,
+                    "warnings": warning_strings,
                 }))
             );
         }

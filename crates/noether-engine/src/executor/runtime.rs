@@ -19,6 +19,7 @@ use noether_core::types::NType;
 use noether_store::StageStore;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use crate::llm::{LlmConfig, LlmProvider, Message};
 
@@ -42,6 +43,8 @@ pub struct RuntimeExecutor {
     descriptions: HashMap<String, String>,
     /// Flattened stage list for search and describe
     stage_cache: Vec<CachedStage>,
+    /// Session-scoped LLM call deduplication: SHA-256(model + prompt) → response.
+    llm_dedup_cache: Mutex<HashMap<String, Value>>,
 }
 
 impl RuntimeExecutor {
@@ -67,6 +70,7 @@ impl RuntimeExecutor {
             llm_config: LlmConfig::default(),
             descriptions,
             stage_cache,
+            llm_dedup_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -187,6 +191,28 @@ impl RuntimeExecutor {
             temperature,
         };
 
+        // LLM call deduplication: identical (model, prompt, system) calls within the same
+        // session return the cached response instead of making a redundant API call.
+        let dedup_key = {
+            use sha2::{Digest, Sha256};
+            let key_data = format!(
+                "{}:{}:{}",
+                model,
+                system_opt.unwrap_or(""),
+                prompt
+            );
+            hex::encode(Sha256::digest(key_data.as_bytes()))
+        };
+
+        {
+            let cache = self.llm_dedup_cache.lock().unwrap();
+            if let Some(cached) = cache.get(&dedup_key) {
+                let mut result = cached.clone();
+                result["from_llm_cache"] = json!(true);
+                return Ok(result);
+            }
+        }
+
         let text = llm
             .complete(&messages, &cfg)
             .map_err(|e| ExecutionError::StageFailed {
@@ -196,11 +222,19 @@ impl RuntimeExecutor {
 
         let tokens_used = text.split_whitespace().count() as u64;
 
-        Ok(json!({
+        let result = json!({
             "text": text,
             "tokens_used": tokens_used,
             "model": model,
-        }))
+            "from_llm_cache": false,
+        });
+
+        self.llm_dedup_cache
+            .lock()
+            .unwrap()
+            .insert(dedup_key, result.clone());
+
+        Ok(result)
     }
 
     fn llm_embed(&self, stage_id: &StageId, input: &Value) -> Result<Value, ExecutionError> {
@@ -643,5 +677,68 @@ mod tests {
             msg.contains("LLM provider not configured"),
             "expected config error, got: {msg}"
         );
+    }
+
+    /// Verify the `Mutex<HashMap>` LLM dedup cache is safe under concurrent access.
+    ///
+    /// Spawns 16 threads all calling the same LLM stage with the same input.
+    /// The MockLlmProvider returns a fixed JSON response. All 16 results must
+    /// be identical (dedup cache working) and there must be no panics (no deadlocks
+    /// or data races from the Mutex).
+    #[test]
+    fn llm_dedup_cache_concurrent_access() {
+        use crate::llm::MockLlmProvider;
+        use std::sync::Arc;
+
+        // `classify_text` returns {"category":"positive","confidence":0.99,"model":"mock"}
+        let mock_response = r#"{"category":"positive","confidence":0.99,"model":"mock"}"#;
+
+        let mut store = MemoryStore::new();
+        for s in load_stdlib() {
+            let _ = store.put(s);
+        }
+
+        let rt = RuntimeExecutor::from_store(&store)
+            .with_llm(Box::new(MockLlmProvider::new(mock_response)), LlmConfig::default());
+        let rt = Arc::new(rt);
+
+        // Find the classify_text stage ID
+        let classify_id = rt
+            .descriptions
+            .iter()
+            .find(|(_, v)| v.contains("Classify text into one of"))
+            .map(|(k, _)| StageId(k.clone()))
+            .expect("classify_text stage not found");
+
+        let input = serde_json::json!({
+            "text": "I love this product",
+            "categories": ["positive", "negative", "neutral"],
+            "model": null
+        });
+
+        // Spawn 16 threads, all calling execute with the same input simultaneously
+        let results: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    let rt = Arc::clone(&rt);
+                    let id = classify_id.clone();
+                    let inp = input.clone();
+                    s.spawn(move || rt.execute(&id, &inp))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        // All 16 results must be Ok and identical (dedup cache serving the same value)
+        assert_eq!(results.len(), 16);
+        let first = results[0].as_ref().expect("first result must be Ok");
+        for (i, r) in results.iter().enumerate() {
+            let val = r.as_ref().unwrap_or_else(|e| panic!("thread {i} failed: {e}"));
+            assert_eq!(
+                val["category"], first["category"],
+                "thread {i} returned different category"
+            );
+        }
+        assert_eq!(first["category"].as_str().unwrap(), "positive");
     }
 }

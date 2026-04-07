@@ -1,4 +1,5 @@
 use crate::lagrange::CompositionNode;
+use noether_core::effects::Effect;
 use noether_core::stage::StageId;
 use noether_store::StageStore;
 use serde::{Deserialize, Serialize};
@@ -36,7 +37,7 @@ pub struct ExecutionPlan {
 pub fn plan_graph(node: &CompositionNode, store: &(impl StageStore + ?Sized)) -> ExecutionPlan {
     let mut steps = Vec::new();
     let mut parallel_groups = Vec::new();
-    flatten_node(node, &mut steps, &mut parallel_groups, &[]);
+    flatten_node(node, &mut steps, &mut parallel_groups, store, &[]);
 
     let cost = estimate_cost(&steps, store);
 
@@ -52,6 +53,7 @@ fn flatten_node(
     node: &CompositionNode,
     steps: &mut Vec<ExecutionStep>,
     parallel_groups: &mut Vec<Vec<usize>>,
+    store: &(impl StageStore + ?Sized),
     depends_on: &[usize],
 ) -> Vec<usize> {
     match node {
@@ -65,18 +67,49 @@ fn flatten_node(
             });
             vec![idx]
         }
+        CompositionNode::Const { .. } => {
+            // Const nodes produce no execution step — they are resolved inline
+            // in the runner without touching the store.
+            depends_on.to_vec()
+        }
         CompositionNode::Sequential { stages } => {
             let mut prev_indices = depends_on.to_vec();
+
+            let start_step = steps.len();
             for stage in stages {
-                prev_indices = flatten_node(stage, steps, parallel_groups, &prev_indices);
+                prev_indices = flatten_node(stage, steps, parallel_groups, store, &prev_indices);
             }
+            let end_step = steps.len();
+
+            // After flattening, check whether ALL direct children are Stage nodes
+            // and all are Pure. If so, add them as a parallel group hint.
+            let all_direct_pure_stages = stages.iter().all(|s| {
+                if let CompositionNode::Stage { id } = s {
+                    store
+                        .get(id)
+                        .ok()
+                        .flatten()
+                        .map(|st| st.signature.effects.contains(&Effect::Pure))
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            });
+
+            if all_direct_pure_stages && stages.len() > 1 {
+                let group: Vec<usize> = (start_step..end_step).collect();
+                if group.len() > 1 {
+                    parallel_groups.push(group);
+                }
+            }
+
             prev_indices
         }
         CompositionNode::Parallel { branches } => {
             let mut group = Vec::new();
             let mut all_outputs = Vec::new();
             for node in branches.values() {
-                let outputs = flatten_node(node, steps, parallel_groups, depends_on);
+                let outputs = flatten_node(node, steps, parallel_groups, store, depends_on);
                 // The first step of each branch is in the parallel group
                 if let Some(&first) = outputs.first() {
                     group.push(first);
@@ -93,19 +126,19 @@ fn flatten_node(
             if_true,
             if_false,
         } => {
-            let pred_out = flatten_node(predicate, steps, parallel_groups, depends_on);
-            let true_out = flatten_node(if_true, steps, parallel_groups, &pred_out);
-            let false_out = flatten_node(if_false, steps, parallel_groups, &pred_out);
+            let pred_out = flatten_node(predicate, steps, parallel_groups, store, depends_on);
+            let true_out = flatten_node(if_true, steps, parallel_groups, store, &pred_out);
+            let false_out = flatten_node(if_false, steps, parallel_groups, store, &pred_out);
             let mut combined = true_out;
             combined.extend(false_out);
             combined
         }
         CompositionNode::Fanout { source, targets } => {
-            let source_out = flatten_node(source, steps, parallel_groups, depends_on);
+            let source_out = flatten_node(source, steps, parallel_groups, store, depends_on);
             let mut group = Vec::new();
             let mut all_outputs = Vec::new();
             for target in targets {
-                let outputs = flatten_node(target, steps, parallel_groups, &source_out);
+                let outputs = flatten_node(target, steps, parallel_groups, store, &source_out);
                 if let Some(&first) = outputs.first() {
                     group.push(first);
                 }
@@ -120,7 +153,7 @@ fn flatten_node(
             let mut all_source_outputs = Vec::new();
             let mut group = Vec::new();
             for src in sources {
-                let outputs = flatten_node(src, steps, parallel_groups, depends_on);
+                let outputs = flatten_node(src, steps, parallel_groups, store, depends_on);
                 if let Some(&first) = outputs.first() {
                     group.push(first);
                 }
@@ -129,10 +162,10 @@ fn flatten_node(
             if group.len() > 1 {
                 parallel_groups.push(group);
             }
-            flatten_node(target, steps, parallel_groups, &all_source_outputs)
+            flatten_node(target, steps, parallel_groups, store, &all_source_outputs)
         }
         CompositionNode::Retry { stage, .. } => {
-            flatten_node(stage, steps, parallel_groups, depends_on)
+            flatten_node(stage, steps, parallel_groups, store, depends_on)
         }
     }
 }

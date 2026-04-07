@@ -163,6 +163,51 @@ impl StageBuilder {
         })
     }
 
+    /// Build a signed stage for synthesized or user-authored stages.
+    ///
+    /// Identical to `build_unsigned` except the stage is signed with the provided key.
+    /// The lifecycle is `Draft`; the store promotes it to `Active` after validation.
+    pub fn build_signed(
+        self,
+        signing_key: &SigningKey,
+        implementation_hash: String,
+    ) -> Result<Stage, StageBuilderError> {
+        let input = self
+            .input
+            .ok_or_else(|| StageBuilderError::MissingField("input".into()))?;
+        let output = self
+            .output
+            .ok_or_else(|| StageBuilderError::MissingField("output".into()))?;
+        let description = self
+            .description
+            .ok_or_else(|| StageBuilderError::MissingField("description".into()))?;
+
+        let signature = StageSignature {
+            input,
+            output,
+            effects: self.effects.unwrap_or_default(),
+            implementation_hash,
+        };
+
+        let id = compute_stage_id(&signature)?;
+        let sig_hex = sign_stage_id(&id, signing_key);
+        let pub_hex = hex::encode(signing_key.verifying_key().to_bytes());
+
+        Ok(Stage {
+            id,
+            signature,
+            capabilities: self.capabilities,
+            cost: self.cost,
+            description,
+            examples: self.examples,
+            lifecycle: StageLifecycle::Draft,
+            ed25519_signature: Some(sig_hex),
+            signer_public_key: Some(pub_hex),
+            implementation_code: self.implementation_code,
+            implementation_language: self.implementation_language,
+        })
+    }
+
     /// Build an unsigned stage for user authoring. Requires an implementation_hash.
     pub fn build_unsigned(self, implementation_hash: String) -> Result<Stage, StageBuilderError> {
         let input = self

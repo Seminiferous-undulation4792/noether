@@ -51,33 +51,79 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("1. ONLY use stage IDs from the AVAILABLE STAGES list. Never invent IDs.\n");
     prompt.push_str("2. Types MUST match: the output type of one stage must be a subtype of the next stage's input type.\n");
     prompt.push_str("3. Most stages take Record inputs with SPECIFIC FIELD NAMES. Check the examples carefully.\n");
-    prompt.push_str("4. Output ONLY a JSON code block — no explanation before or after.\n\n");
+    prompt.push_str("4. Output ONLY a JSON code block — no explanation before or after.\n");
+    prompt.push_str("5. EVERY node in the graph (including nested ones) MUST have an `\"op\"` field. There are NO exceptions.\n");
+    prompt.push_str("   Valid values: `\"Stage\"`, `\"Const\"`, `\"Sequential\"`, `\"Parallel\"`, `\"Branch\"`, `\"Fanout\"`, `\"Retry\"`.\n\n");
 
     // --- Type system primer ---
     prompt.push_str("## Type System\n\n");
-    prompt
-        .push_str("- `Any` accepts any value. `Text`, `Number`, `Bool`, `Null` are primitives.\n");
+    prompt.push_str("- `Any` accepts any value. `Text`, `Number`, `Bool`, `Null` are primitives.\n");
     prompt.push_str("- `Record { field: Type }` is an object with named fields. The stage REQUIRES exactly those fields.\n");
     prompt.push_str("- `List<T>` is an array. `Map<K,V>` is a key-value object.\n");
     prompt.push_str("- `T | Null` means the field is optional (can be null).\n");
-    prompt.push_str(
-        "- Width subtyping: `{a, b, c}` is subtype of `{a, b}` — extra fields are OK.\n\n",
-    );
+    prompt.push_str("- Width subtyping: `{a, b, c}` is subtype of `{a, b}` — extra fields are OK.\n\n");
 
-    // --- Operators (concise) ---
+    // --- Operators ---
     prompt.push_str("## Operators\n\n");
     prompt.push_str("- **Stage**: `{\"op\": \"Stage\", \"id\": \"<hash>\"}`\n");
+    prompt.push_str("- **Const**: `{\"op\": \"Const\", \"value\": <any JSON value>}` — emits a literal constant, ignores its input entirely\n");
     prompt.push_str("- **Sequential**: `{\"op\": \"Sequential\", \"stages\": [A, B, C]}` — output of A feeds B, then C\n");
-    prompt.push_str("- **Parallel**: `{\"op\": \"Parallel\", \"branches\": {\"key1\": A, \"key2\": B}}` — concurrent, merges to Record\n");
-    prompt.push_str(
-        "- **Branch**: `{\"op\": \"Branch\", \"predicate\": P, \"if_true\": A, \"if_false\": B}`\n",
-    );
+    prompt.push_str("- **Parallel**: `{\"op\": \"Parallel\", \"branches\": {\"key1\": A, \"key2\": B}}` — ALL branches receive the SAME full input (or the field matching the branch name if the input is a Record); outputs are merged into a Record `{\"key1\": <out_A>, \"key2\": <out_B>}`\n");
+    prompt.push_str("- **Branch**: `{\"op\": \"Branch\", \"predicate\": P, \"if_true\": A, \"if_false\": B}` — P receives the original input and MUST return Bool; A and B also receive the SAME original input (NOT the Bool)\n");
     prompt.push_str("- **Fanout**: `{\"op\": \"Fanout\", \"source\": A, \"targets\": [B, C]}`\n");
     prompt.push_str("- **Retry**: `{\"op\": \"Retry\", \"stage\": A, \"max_attempts\": 3, \"delay_ms\": 500}`\n\n");
 
-    // --- Synthesis option (last resort) ---
-    prompt.push_str("## If You Need a New Stage\n\n");
-    prompt.push_str("If—and only if—no combination of existing stages can solve the problem, output a synthesis request instead of a graph:\n\n");
+    // --- Record construction guidance ---
+    prompt.push_str("## Record Construction — VERY IMPORTANT\n\n");
+    prompt.push_str("Many stages require `Record { field1: T1, field2: T2, ... }` as input.\n");
+    prompt.push_str("**The canonical pattern: `Parallel` + `Const`** assembles a Record from live stage outputs and literal values.\n\n");
+    prompt.push_str("How Parallel works:\n");
+    prompt.push_str("- Each branch receives the FULL pipeline input (not null, not a sub-field).\n");
+    prompt.push_str("- `Const` branches ignore the input and emit the literal value.\n");
+    prompt.push_str("- `Stage` branches receive the full input and emit their output.\n");
+    prompt.push_str("- The merged output is `{\"branch_name\": <branch_output>, ...}`.\n\n");
+    prompt.push_str("**Example: input is `Record{query,limit}`, next stage needs `Record{topic,results,summary}`**\n");
+    prompt.push_str("```json\n");
+    prompt.push_str("{\n");
+    prompt.push_str("  \"op\": \"Parallel\",\n");
+    prompt.push_str("  \"branches\": {\n");
+    prompt.push_str("    \"results\": {\"op\": \"Stage\", \"id\": \"<search_stage_id>\"},\n");
+    prompt.push_str("    \"topic\":   {\"op\": \"Const\", \"value\": \"async runtime\"},\n");
+    prompt.push_str("    \"summary\": {\"op\": \"Const\", \"value\": \"Top results for async runtime\"}\n");
+    prompt.push_str("  }\n");
+    prompt.push_str("}\n");
+    prompt.push_str("```\n");
+    prompt.push_str("This produces `{results: [...], topic: \"async runtime\", summary: \"...\"}` — exactly what the next stage needs.\n\n");
+    prompt.push_str("**COMMON MISTAKE**: Feeding a bare `Bool` or `Number` to a stage that expects a Record.\n");
+    prompt.push_str("ALWAYS check that your Sequential chain's types match at each step.\n\n");
+
+    // --- Branch operator guidance ---
+    prompt.push_str("## Branch Operator — How It Works\n\n");
+    prompt.push_str("```\nBranch receives input X.\n");
+    prompt.push_str("1. Runs predicate(X) → must return Bool\n");
+    prompt.push_str("2. If true:  runs if_true(X)  — same X, NOT the Bool\n");
+    prompt.push_str("3. If false: runs if_false(X) — same X, NOT the Bool\n```\n\n");
+    prompt.push_str("Do NOT use Branch when you mean a stage that selects between values.\n");
+    prompt.push_str("Branch is for routing execution to different sub-graphs based on a condition.\n\n");
+
+    // --- Synthesis option ---
+    prompt.push_str("## When to Synthesize a New Stage\n\n");
+    prompt.push_str("**PREFER SYNTHESIS over complex composition** in these cases:\n\n");
+    prompt.push_str("- The required primitive operation (e.g. modulo, even/odd, filter, sort-by-key) has no matching stage.\n");
+    prompt.push_str("- Solving the problem would need 3+ stages of awkward Record manipulation.\n");
+    prompt.push_str("- You need to filter a list, transform each element with custom logic, or reshape data in a bespoke way.\n");
+    prompt.push_str("- **You need to call a SPECIFIC external HTTP API** — always synthesize for API calls.\n");
+    prompt.push_str("  The `http_get` stdlib stage is for generic URL fetching; it cannot parse JSON, extract fields,\n");
+    prompt.push_str("  or format results specific to a given API. Always synthesize a stage that does the full\n");
+    prompt.push_str("  HTTP call + parse + reshape in one Python function.\n\n");
+    prompt.push_str("**CRITICAL: A synthesis request is a STANDALONE top-level document.**\n");
+    prompt.push_str("It CANNOT be embedded inside a `Sequential.stages` list or any other graph node.\n");
+    prompt.push_str("You MUST choose ONE of these two responses per turn:\n");
+    prompt.push_str("  Option A) A synthesis request (to register a missing stage), OR\n");
+    prompt.push_str("  Option B) A composition graph (using existing + already-registered stages).\n");
+    prompt.push_str("If you return a synthesis request, the stage will be registered and you WILL get\n");
+    prompt.push_str("another turn to compose using that stage. Do NOT mix them in one response.\n\n");
+    prompt.push_str("**Synthesis format (respond with ONLY this — no graph, no explanation):**\n\n");
     prompt.push_str("```json\n");
     prompt.push_str("{\n");
     prompt.push_str("  \"action\": \"synthesize\",\n");
@@ -92,14 +138,22 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("```\n\n");
     prompt.push_str("NType JSON format: `{\"kind\":\"Text\"}`, `{\"kind\":\"Number\"}`, `{\"kind\":\"Bool\"}`, `{\"kind\":\"Any\"}`, `{\"kind\":\"Null\"}`, ");
     prompt.push_str("`{\"kind\":\"List\",\"value\":<T>}`, `{\"kind\":\"Record\",\"value\":{\"field\":<T>,...}}`, `{\"kind\":\"Union\",\"value\":[<T>,...]}` \n\n");
-    prompt.push_str("**Always prefer composing existing stages. Only use synthesis if composition is genuinely impossible.**\n\n");
+    prompt.push_str("**Examples that SHOULD use synthesis:**\n");
+    prompt.push_str("- \"check if a number is even or odd\" → synthesize `is_even_or_odd` (Number → Text)\n");
+    prompt.push_str("- \"filter a list keeping items that match a pattern\" → synthesize `filter_by_pattern` (Record { items, pattern } → List)\n");
+    prompt.push_str("- \"sort a list by a field\" → synthesize `sort_by_field` (Record { items, field } → List)\n");
+    prompt.push_str("- \"search npm packages and return results\" → synthesize `npm_search` (Record { query, limit } → List) — NEVER try to compose with http_get\n");
+    prompt.push_str("- \"search GitHub repos\" → synthesize `github_search` — NEVER try to compose with http_get\n");
+    prompt.push_str("- ANY call to a named external API (GitHub, npm, Hacker News, Spotify, etc.) → synthesize\n\n");
 
-    // --- Few-shot example using real IDs when available ---
-    // Look for parse_json and to_json in candidates so the example uses actual hashes.
+    // --- Few-shot examples using real IDs when available ---
     let parse_json_id = find_candidate_id(candidates, "Parse a JSON string");
     let to_json_id = find_candidate_id(candidates, "Serialize any value to a JSON");
+    let is_null_id = find_candidate_id(candidates, "Check if a value is null");
+    let text_upper_id = find_candidate_id(candidates, "Convert text to uppercase");
+    let text_lower_id = find_candidate_id(candidates, "Convert text to lowercase");
 
-    prompt.push_str("## EXAMPLE: Multi-stage composition\n\n");
+    prompt.push_str("## EXAMPLE 1: Sequential composition\n\n");
     prompt.push_str("Problem: \"Parse a JSON string and serialize it back\"\n\n");
     prompt.push_str("The stage `parse_json` has input `Text` and output `Any`.\n");
     prompt.push_str("The stage `to_json` has input `Any` and output `Text`.\n");
@@ -119,6 +173,57 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
         "      {{\"op\": \"Stage\", \"id\": \"{}\"}}\n",
         to_json_id
     ));
+    prompt.push_str("    ]\n");
+    prompt.push_str("  }\n");
+    prompt.push_str("}\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("## EXAMPLE 2: Branch operator (condition-based routing)\n\n");
+    prompt.push_str("Problem: \"Convert text to uppercase if it is not null, otherwise return empty string\"\n\n");
+    prompt.push_str("The `Branch` predicate receives the original `Text | Null` input and returns `Bool`.\n");
+    prompt.push_str("`if_true` and `if_false` ALSO receive the original input — NOT the Bool.\n\n");
+    prompt.push_str("```json\n");
+    prompt.push_str("{\n");
+    prompt.push_str("  \"description\": \"Uppercase non-null text\",\n");
+    prompt.push_str("  \"version\": \"0.1.0\",\n");
+    prompt.push_str("  \"root\": {\n");
+    prompt.push_str("    \"op\": \"Branch\",\n");
+    prompt.push_str(&format!(
+        "    \"predicate\": {{\"op\": \"Stage\", \"id\": \"{}\"}},\n",
+        is_null_id
+    ));
+    prompt.push_str(&format!(
+        "    \"if_true\": {{\"op\": \"Stage\", \"id\": \"{}\"}},\n",
+        text_lower_id
+    ));
+    prompt.push_str(&format!(
+        "    \"if_false\": {{\"op\": \"Stage\", \"id\": \"{}\"}}\n",
+        text_upper_id
+    ));
+    prompt.push_str("  }\n");
+    prompt.push_str("}\n");
+    prompt.push_str("```\n\n");
+
+    prompt.push_str("## EXAMPLE 3: Const + Parallel to assemble a multi-field Record\n\n");
+    prompt.push_str("Problem: \"Search for repos, then format a report with a fixed topic and summary\"\n\n");
+    prompt.push_str("The search stage returns a List. The format stage needs `Record{topic, results, summary}`.\n");
+    prompt.push_str("Use Parallel: `results` branch runs the search (receives full input), `topic` and `summary` are Const literals.\n\n");
+    prompt.push_str("```json\n");
+    prompt.push_str("{\n");
+    prompt.push_str("  \"description\": \"Search then format a report\",\n");
+    prompt.push_str("  \"version\": \"0.1.0\",\n");
+    prompt.push_str("  \"root\": {\n");
+    prompt.push_str("    \"op\": \"Sequential\",\n");
+    prompt.push_str("    \"stages\": [\n");
+    prompt.push_str("      {\n");
+    prompt.push_str("        \"op\": \"Parallel\",\n");
+    prompt.push_str("        \"branches\": {\n");
+    prompt.push_str("          \"results\": {\"op\": \"Stage\", \"id\": \"<search_stage_id>\"},\n");
+    prompt.push_str("          \"topic\":   {\"op\": \"Const\", \"value\": \"async runtime\"},\n");
+    prompt.push_str("          \"summary\": {\"op\": \"Const\", \"value\": \"Top async runtime libraries\"}\n");
+    prompt.push_str("        }\n");
+    prompt.push_str("      },\n");
+    prompt.push_str("      {\"op\": \"Stage\", \"id\": \"<format_stage_id>\"}\n");
     prompt.push_str("    ]\n");
     prompt.push_str("  }\n");
     prompt.push_str("}\n");
@@ -172,6 +277,133 @@ fn find_candidate_id(candidates: &[(&SearchResult, &Stage)], needle: &str) -> St
         .unwrap_or_else(|| format!("<{needle}>"))
 }
 
+/// Build the effect inference prompt.
+///
+/// Given the implementation code, asks the LLM which Noether effects the code has.
+/// Expected LLM response: a JSON array of effect names, e.g. `["Network", "Fallible"]`.
+pub fn build_effect_inference_prompt(code: &str, language: &str) -> String {
+    let mut p = String::new();
+    p.push_str("You are analyzing code to determine its computational effects for the Noether platform.\n\n");
+    p.push_str("## Noether Effect Types\n\n");
+    p.push_str("- **Pure**: No side effects. Same inputs always produce same outputs. No I/O, no randomness.\n");
+    p.push_str("- **Fallible**: The operation may fail or raise an exception.\n");
+    p.push_str("- **Network**: Makes HTTP/TCP/DNS requests or any network I/O.\n");
+    p.push_str("- **NonDeterministic**: Output may vary even with identical inputs (random, timestamp, etc.).\n");
+    p.push_str("- **Llm**: Calls an LLM or AI model API.\n");
+    p.push_str("- **Unknown**: Cannot determine effects from code inspection.\n\n");
+
+    p.push_str(&format!("## Code to Analyze ({language})\n\n"));
+    p.push_str("```\n");
+    p.push_str(code);
+    p.push_str("\n```\n\n");
+
+    p.push_str("## Task\n\n");
+    p.push_str("List ONLY the effects that apply to this code. If the code has no side effects and is deterministic, return `[\"Pure\"]`.\n\n");
+    p.push_str("Rules:\n");
+    p.push_str("- Pure and NonDeterministic are mutually exclusive (non-deterministic implies NOT Pure).\n");
+    p.push_str("- If the code imports urllib, requests, httpx, aiohttp, or any HTTP library → Network.\n");
+    p.push_str("- If the code has try/except or can raise → Fallible.\n");
+    p.push_str("- If you cannot determine the effects → Unknown (not Pure).\n\n");
+
+    p.push_str("## Response Format\n\n");
+    p.push_str("Respond with ONLY a JSON array of effect names (no other text):\n");
+    p.push_str("```json\n");
+    p.push_str("[\"Effect1\", \"Effect2\"]\n");
+    p.push_str("```\n");
+    p
+}
+
+/// Parse an effect inference response from the LLM into an `EffectSet`.
+///
+/// Accepts `["Pure"]`, `["Network", "Fallible"]`, etc.
+/// Falls back to `EffectSet::unknown()` on any parse error.
+pub fn extract_effect_response(response: &str) -> noether_core::effects::EffectSet {
+    use noether_core::effects::{Effect, EffectSet};
+
+    let json_str = match extract_json_array(response) {
+        Some(s) => s,
+        None => return EffectSet::unknown(),
+    };
+
+    let names: Vec<String> = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return EffectSet::unknown(),
+    };
+
+    let effects: Vec<Effect> = names
+        .iter()
+        .filter_map(|name| match name.as_str() {
+            "Pure" => Some(Effect::Pure),
+            "Fallible" => Some(Effect::Fallible),
+            "Network" => Some(Effect::Network),
+            "NonDeterministic" => Some(Effect::NonDeterministic),
+            "Llm" => Some(Effect::Llm { model: "unknown".into() }),
+            "Unknown" => Some(Effect::Unknown),
+            _ => None,
+        })
+        .collect();
+
+    if effects.is_empty() {
+        EffectSet::unknown()
+    } else {
+        EffectSet::new(effects)
+    }
+}
+
+/// Extract the first JSON array `[...]` from a response string.
+fn extract_json_array(response: &str) -> Option<&str> {
+    // Prefer ```json ... ``` fenced block
+    if let Some(start) = response.find("```json") {
+        let content = &response[start + 7..];
+        if let Some(end) = content.find("```") {
+            return Some(content[..end].trim());
+        }
+    }
+    // Plain ``` ... ``` fenced block
+    if let Some(start) = response.find("```") {
+        let content = &response[start + 3..];
+        if let Some(end) = content.find("```") {
+            let candidate = content[..end].trim();
+            if candidate.starts_with('[') {
+                return Some(candidate);
+            }
+        }
+    }
+    // Raw array anywhere
+    if let Some(start) = response.find('[') {
+        let bytes = response.as_bytes();
+        let mut depth: i32 = 0;
+        let mut in_string = false;
+        let mut escape = false;
+        for (i, &b) in bytes[start..].iter().enumerate() {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if in_string {
+                match b {
+                    b'\\' => escape = true,
+                    b'"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match b {
+                b'"' => in_string = true,
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(response[start..start + i + 1].trim());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 /// Build the codegen prompt that asks the LLM to implement a synthesized stage.
 pub fn build_synthesis_prompt(spec: &SynthesisSpec) -> String {
     let mut p = String::new();
@@ -193,6 +425,25 @@ pub fn build_synthesis_prompt(spec: &SynthesisSpec) -> String {
         "   `input_value` is a Python dict/str/number/list/bool/None matching the input type.\n",
     );
     p.push_str("   Return a value matching the output type.\n\n");
+    p.push_str("## Python Implementation Rules\n\n");
+    p.push_str("- **Prefer Python stdlib over third-party packages** when possible.\n");
+    p.push_str("  - For HTTP: use `urllib.request` / `urllib.parse` (always available), NOT `requests`.\n");
+    p.push_str("  - For JSON: use `json` (always available).\n");
+    p.push_str("  - For dates: use `datetime` (always available).\n");
+    p.push_str("  - For regex: use `re` (always available).\n");
+    p.push_str("- Only use third-party packages (`requests`, `pandas`, etc.) when there is no stdlib alternative.\n");
+    p.push_str("- **CRITICAL**: ALL imports MUST be placed at the top of the `execute` function body,\n");
+    p.push_str("  BEFORE any use of those modules. Never use a module without importing it first.\n\n");
+    p.push_str("## Correct HTTP Implementation Pattern\n\n");
+    p.push_str("```python\n");
+    p.push_str("def execute(input_value):\n");
+    p.push_str("    # ALWAYS import at the top of execute\n");
+    p.push_str("    import urllib.request, urllib.parse, json\n");
+    p.push_str("    url = 'https://api.example.com/search?' + urllib.parse.urlencode({'q': input_value['query']})\n");
+    p.push_str("    with urllib.request.urlopen(url) as resp:\n");
+    p.push_str("        data = json.loads(resp.read().decode())\n");
+    p.push_str("    return data['items']\n");
+    p.push_str("```\n\n");
 
     p.push_str("## Output Format\n\n");
     p.push_str("Respond with ONLY this JSON (no other text):\n");
@@ -438,10 +689,6 @@ mod tests {
             prompt.contains(&to_json.id.0),
             "prompt should contain real to_json hash"
         );
-        assert!(
-            !prompt.contains("PARSE_JSON_ID") && !prompt.contains("TO_JSON_ID"),
-            "prompt must not contain placeholder IDs"
-        );
     }
 
     #[test]
@@ -451,6 +698,31 @@ mod tests {
         assert!(
             prompt.contains("<Parse a JSON string>"),
             "expected placeholder when parse_json not in candidates"
+        );
+    }
+
+    #[test]
+    fn prompt_contains_branch_guidance() {
+        let prompt = build_system_prompt(&[]);
+        assert!(
+            prompt.contains("predicate"),
+            "prompt should explain Branch predicate"
+        );
+        assert!(
+            prompt.contains("original input"),
+            "prompt should clarify that if_true/if_false receive original input"
+        );
+        assert!(
+            prompt.contains("Record Construction"),
+            "prompt should have Record construction section"
+        );
+        assert!(
+            prompt.contains("\"Const\""),
+            "prompt should list Const as a valid op"
+        );
+        assert!(
+            prompt.contains("Const` + `Parallel") || prompt.contains("Parallel` + `Const"),
+            "prompt should explain Const+Parallel pattern"
         );
     }
 

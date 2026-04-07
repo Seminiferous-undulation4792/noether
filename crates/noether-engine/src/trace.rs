@@ -9,6 +9,20 @@ pub struct CompositionTrace {
     pub duration_ms: u64,
     pub status: TraceStatus,
     pub stages: Vec<StageTrace>,
+    /// Capability violations detected during pre-flight (informational; executions are blocked before this).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_events: Vec<SecurityEvent>,
+    /// Effect warnings produced by the type checker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+/// A security event recorded when a capability policy blocks a stage.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SecurityEvent {
+    pub stage_id: StageId,
+    pub capability: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,6 +148,8 @@ mod tests {
                 input_hash: Some("inhash".into()),
                 output_hash: Some("outhash".into()),
             }],
+            security_events: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 

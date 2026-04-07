@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ACLI Error Envelope",
+  "description": "Standard error response envelope per ACLI spec §2.2",
+  "type": "object",
+  "required": ["ok", "command", "error", "meta"],
+  "properties": {
+    "ok": { "type": "boolean", "const": false },
+    "command": { "type": "string" },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": ["GENERAL_ERROR", "NOT_FOUND", "INVALID_ARGS", "CONFLICT", "PRECONDITION_FAILED"],
+          "description": "Machine-readable error code"
+        },
+        "message": { "type": "string", "description": "Human-readable summary" },
+        "hint": { "type": "string", "description": "Single short corrective action" },
+        "hints": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Structured list of actionable hints; one per violation"
+        },
+        "docs": { "type": "string", "description": "Path to relevant reference file" }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "required": ["duration_ms", "version"],
+      "properties": {
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "version": { "type": "string" }
+      }
+    }
+  }
+}

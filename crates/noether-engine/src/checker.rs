@@ -1,8 +1,10 @@
 use crate::lagrange::CompositionNode;
+use noether_core::capability::Capability;
+use noether_core::effects::Effect;
 use noether_core::stage::StageId;
 use noether_core::types::{is_subtype_of, IncompatibilityReason, NType, TypeCompatibility};
 use noether_store::StageStore;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// The resolved input/output types of a composition node.
@@ -12,7 +14,296 @@ pub struct ResolvedType {
     pub output: NType,
 }
 
-/// Errors detected during graph type checking.
+// ── Capability enforcement ─────────────────────────────────────────────────
+
+/// Policy controlling which capabilities a composition is allowed to use.
+///
+/// `allowed` is empty → all capabilities permitted (default / backward-compatible).
+/// `allowed` is non-empty → only the listed capabilities are permitted.
+#[derive(Debug, Clone, Default)]
+pub struct CapabilityPolicy {
+    /// Capabilities the caller grants. Empty set = allow all.
+    pub allowed: BTreeSet<Capability>,
+}
+
+impl CapabilityPolicy {
+    /// A policy that allows every capability.
+    pub fn allow_all() -> Self {
+        Self { allowed: BTreeSet::new() }
+    }
+
+    /// A policy that permits only the listed capabilities.
+    pub fn restrict(caps: impl IntoIterator<Item = Capability>) -> Self {
+        Self { allowed: caps.into_iter().collect() }
+    }
+
+    fn is_allowed(&self, cap: &Capability) -> bool {
+        self.allowed.is_empty() || self.allowed.contains(cap)
+    }
+}
+
+/// A single capability violation found during pre-flight checking.
+#[derive(Debug, Clone)]
+pub struct CapabilityViolation {
+    pub stage_id: StageId,
+    pub required: Capability,
+    pub message: String,
+}
+
+impl fmt::Display for CapabilityViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "stage {} requires capability {:?} which is not granted",
+            self.stage_id.0, self.required
+        )
+    }
+}
+
+/// Pre-flight check: walk the graph and verify every stage's declared capabilities
+/// are within the granted policy. Returns an empty vec when all capabilities pass.
+pub fn check_capabilities(
+    node: &CompositionNode,
+    store: &(impl StageStore + ?Sized),
+    policy: &CapabilityPolicy,
+) -> Vec<CapabilityViolation> {
+    let mut violations = Vec::new();
+    collect_capability_violations(node, store, policy, &mut violations);
+    violations
+}
+
+fn collect_capability_violations(
+    node: &CompositionNode,
+    store: &(impl StageStore + ?Sized),
+    policy: &CapabilityPolicy,
+    violations: &mut Vec<CapabilityViolation>,
+) {
+    match node {
+        CompositionNode::Stage { id } => {
+            if let Ok(Some(stage)) = store.get(id) {
+                for cap in &stage.capabilities {
+                    if !policy.is_allowed(cap) {
+                        violations.push(CapabilityViolation {
+                            stage_id: id.clone(),
+                            required: cap.clone(),
+                            message: format!(
+                                "stage '{}' requires {:?}; grant it with --allow-capabilities",
+                                stage.description, cap
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        CompositionNode::Const { .. } => {} // no capabilities in a constant
+        CompositionNode::Sequential { stages } => {
+            for s in stages {
+                collect_capability_violations(s, store, policy, violations);
+            }
+        }
+        CompositionNode::Parallel { branches } => {
+            for branch in branches.values() {
+                collect_capability_violations(branch, store, policy, violations);
+            }
+        }
+        CompositionNode::Branch { predicate, if_true, if_false } => {
+            collect_capability_violations(predicate, store, policy, violations);
+            collect_capability_violations(if_true, store, policy, violations);
+            collect_capability_violations(if_false, store, policy, violations);
+        }
+        CompositionNode::Fanout { source, targets } => {
+            collect_capability_violations(source, store, policy, violations);
+            for t in targets {
+                collect_capability_violations(t, store, policy, violations);
+            }
+        }
+        CompositionNode::Merge { sources, target } => {
+            for s in sources {
+                collect_capability_violations(s, store, policy, violations);
+            }
+            collect_capability_violations(target, store, policy, violations);
+        }
+        CompositionNode::Retry { stage, .. } => {
+            collect_capability_violations(stage, store, policy, violations);
+        }
+    }
+}
+
+// ── Signature verification ─────────────────────────────────────────────────
+
+/// Why a stage's signature check failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureViolationKind {
+    /// The stage has no `ed25519_signature` / `signer_public_key` — it was built unsigned.
+    Missing,
+    /// A signature is present but cryptographic verification failed (tampered stage).
+    Invalid,
+}
+
+impl fmt::Display for SignatureViolationKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => write!(f, "unsigned"),
+            Self::Invalid => write!(f, "invalid signature"),
+        }
+    }
+}
+
+/// A single signature violation found during pre-flight checking.
+#[derive(Debug, Clone)]
+pub struct SignatureViolation {
+    pub stage_id: StageId,
+    pub kind: SignatureViolationKind,
+    pub message: String,
+}
+
+impl fmt::Display for SignatureViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "stage {} — {}", self.stage_id.0, self.message)
+    }
+}
+
+/// Pre-flight check: walk the graph and verify every stage's Ed25519 signature.
+///
+/// Returns an empty vec when all signatures pass. Stages with a missing
+/// signature OR an invalid signature are both reported as violations.
+pub fn verify_signatures(
+    node: &CompositionNode,
+    store: &(impl StageStore + ?Sized),
+) -> Vec<SignatureViolation> {
+    let mut violations = Vec::new();
+    collect_signature_violations(node, store, &mut violations);
+    violations
+}
+
+fn collect_signature_violations(
+    node: &CompositionNode,
+    store: &(impl StageStore + ?Sized),
+    violations: &mut Vec<SignatureViolation>,
+) {
+    match node {
+        CompositionNode::Stage { id } => {
+            if let Ok(Some(stage)) = store.get(id) {
+                match (&stage.ed25519_signature, &stage.signer_public_key) {
+                    (None, _) | (_, None) => {
+                        violations.push(SignatureViolation {
+                            stage_id: id.clone(),
+                            kind: SignatureViolationKind::Missing,
+                            message: format!(
+                                "stage '{}' has no signature — add it via the signing pipeline",
+                                stage.description
+                            ),
+                        });
+                    }
+                    (Some(sig_hex), Some(pub_hex)) => {
+                        match noether_core::stage::verify_stage_signature(id, sig_hex, pub_hex) {
+                            Ok(true) => {} // valid
+                            Ok(false) => {
+                                violations.push(SignatureViolation {
+                                    stage_id: id.clone(),
+                                    kind: SignatureViolationKind::Invalid,
+                                    message: format!(
+                                        "stage '{}' signature verification failed — possible tampering",
+                                        stage.description
+                                    ),
+                                });
+                            }
+                            Err(e) => {
+                                violations.push(SignatureViolation {
+                                    stage_id: id.clone(),
+                                    kind: SignatureViolationKind::Invalid,
+                                    message: format!(
+                                        "stage '{}' signature could not be decoded: {e}",
+                                        stage.description
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            // If the stage is not in the store, the type-checker will already
+            // have reported an unknown-stage error; skip here.
+        }
+        CompositionNode::Const { .. } => {} // constants have no signature to verify
+        CompositionNode::Sequential { stages } => {
+            for s in stages {
+                collect_signature_violations(s, store, violations);
+            }
+        }
+        CompositionNode::Parallel { branches } => {
+            for branch in branches.values() {
+                collect_signature_violations(branch, store, violations);
+            }
+        }
+        CompositionNode::Branch { predicate, if_true, if_false } => {
+            collect_signature_violations(predicate, store, violations);
+            collect_signature_violations(if_true, store, violations);
+            collect_signature_violations(if_false, store, violations);
+        }
+        CompositionNode::Fanout { source, targets } => {
+            collect_signature_violations(source, store, violations);
+            for t in targets {
+                collect_signature_violations(t, store, violations);
+            }
+        }
+        CompositionNode::Merge { sources, target } => {
+            for s in sources {
+                collect_signature_violations(s, store, violations);
+            }
+            collect_signature_violations(target, store, violations);
+        }
+        CompositionNode::Retry { stage, .. } => {
+            collect_signature_violations(stage, store, violations);
+        }
+    }
+}
+
+// ── Effect warnings ────────────────────────────────────────────────────────
+
+/// Warnings about effect usage detected during graph type-checking.
+///
+/// These are soft issues — the graph is structurally valid but may have
+/// surprising runtime behaviour. Callers decide whether to block or surface them.
+#[derive(Debug, Clone)]
+pub enum EffectWarning {
+    /// A `Fallible` stage is not wrapped in a `Retry` node. Failures propagate.
+    FallibleWithoutRetry { stage_id: StageId },
+    /// A `NonDeterministic` stage's output feeds a `Pure` stage.
+    NonDeterministicFeedingPure { from: StageId, to: StageId },
+    /// The sum of declared `Cost` effects exceeds the given budget (in cents).
+    CostBudgetExceeded { total_cents: u64, budget_cents: u64 },
+}
+
+impl fmt::Display for EffectWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EffectWarning::FallibleWithoutRetry { stage_id } => write!(
+                f,
+                "stage {} is Fallible but has no Retry wrapper; failures will propagate",
+                stage_id.0
+            ),
+            EffectWarning::NonDeterministicFeedingPure { from, to } => write!(
+                f,
+                "stage {} is NonDeterministic but feeds Pure stage {}; Pure caching will be bypassed",
+                from.0, to.0
+            ),
+            EffectWarning::CostBudgetExceeded { total_cents, budget_cents } => write!(
+                f,
+                "estimated composition cost ({total_cents}¢) exceeds budget ({budget_cents}¢)"
+            ),
+        }
+    }
+}
+
+/// The result of a successful graph type-check: resolved types plus any effect warnings.
+#[derive(Debug, Clone)]
+pub struct CheckResult {
+    pub resolved: ResolvedType,
+    pub warnings: Vec<EffectWarning>,
+}
+
+// ── Errors detected during graph type checking ────────────────────────────
 #[derive(Debug, Clone)]
 pub enum GraphTypeError {
     StageNotFound {
@@ -100,18 +391,139 @@ impl fmt::Display for GraphTypeError {
 
 /// Type-check a composition graph against the stage store.
 ///
-/// Returns the resolved input/output types of the entire graph,
-/// or a list of errors if type checking fails.
+/// Returns `CheckResult` (resolved types + effect warnings) on success,
+/// or a list of hard type errors on failure.
 pub fn check_graph(
     node: &CompositionNode,
     store: &(impl StageStore + ?Sized),
-) -> Result<ResolvedType, Vec<GraphTypeError>> {
+) -> Result<CheckResult, Vec<GraphTypeError>> {
     let mut errors = Vec::new();
     let result = check_node(node, store, &mut errors);
     if errors.is_empty() {
-        Ok(result.unwrap())
+        let resolved = result.unwrap();
+        let warnings = collect_effect_warnings(node, store, None);
+        Ok(CheckResult { resolved, warnings })
     } else {
         Err(errors)
+    }
+}
+
+/// Collect effect warnings by walking the graph.
+/// `cost_budget_cents` — pass `Some(n)` to enable budget enforcement.
+pub fn collect_effect_warnings(
+    node: &CompositionNode,
+    store: &(impl StageStore + ?Sized),
+    cost_budget_cents: Option<u64>,
+) -> Vec<EffectWarning> {
+    let mut warnings = Vec::new();
+    let mut total_cost: u64 = 0;
+    collect_warnings_inner(node, store, &mut warnings, &mut total_cost, false);
+    if let Some(budget) = cost_budget_cents {
+        if total_cost > budget {
+            warnings.push(EffectWarning::CostBudgetExceeded {
+                total_cents: total_cost,
+                budget_cents: budget,
+            });
+        }
+    }
+    warnings
+}
+
+fn collect_warnings_inner(
+    node: &CompositionNode,
+    store: &(impl StageStore + ?Sized),
+    warnings: &mut Vec<EffectWarning>,
+    total_cost: &mut u64,
+    _parent_is_retry: bool,
+) {
+    match node {
+        CompositionNode::Stage { id } => {
+            if let Ok(Some(stage)) = store.get(id) {
+                // Accumulate cost
+                for effect in stage.signature.effects.iter() {
+                    if let Effect::Cost { cents } = effect {
+                        *total_cost = total_cost.saturating_add(*cents);
+                    }
+                }
+                // Fallible without retry is handled at the parent sequential level
+            }
+        }
+        CompositionNode::Const { .. } => {} // no effects in a constant
+        CompositionNode::Sequential { stages } => {
+            for (i, s) in stages.iter().enumerate() {
+                collect_warnings_inner(s, store, warnings, total_cost, false);
+
+                // Rule: Fallible stage not wrapped in Retry
+                if let CompositionNode::Stage { id } = s {
+                    if let Ok(Some(stage)) = store.get(id) {
+                        if stage.signature.effects.contains(&Effect::Fallible) {
+                            warnings.push(EffectWarning::FallibleWithoutRetry {
+                                stage_id: id.clone(),
+                            });
+                        }
+                    }
+                }
+
+                // Rule: NonDeterministic output → Pure input
+                if i + 1 < stages.len() {
+                    if let (
+                        CompositionNode::Stage { id: from_id },
+                        CompositionNode::Stage { id: to_id },
+                    ) = (s, &stages[i + 1])
+                    {
+                        let from_nd = store
+                            .get(from_id)
+                            .ok()
+                            .flatten()
+                            .map(|s| s.signature.effects.contains(&Effect::NonDeterministic))
+                            .unwrap_or(false);
+                        let to_pure = store
+                            .get(to_id)
+                            .ok()
+                            .flatten()
+                            .map(|s| s.signature.effects.contains(&Effect::Pure))
+                            .unwrap_or(false);
+
+                        if from_nd && to_pure {
+                            warnings.push(EffectWarning::NonDeterministicFeedingPure {
+                                from: from_id.clone(),
+                                to: to_id.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        CompositionNode::Parallel { branches } => {
+            for branch in branches.values() {
+                collect_warnings_inner(branch, store, warnings, total_cost, false);
+            }
+        }
+        CompositionNode::Branch { predicate, if_true, if_false } => {
+            collect_warnings_inner(predicate, store, warnings, total_cost, false);
+            collect_warnings_inner(if_true, store, warnings, total_cost, false);
+            collect_warnings_inner(if_false, store, warnings, total_cost, false);
+        }
+        CompositionNode::Fanout { source, targets } => {
+            collect_warnings_inner(source, store, warnings, total_cost, false);
+            for t in targets {
+                collect_warnings_inner(t, store, warnings, total_cost, false);
+            }
+        }
+        CompositionNode::Merge { sources, target } => {
+            for s in sources {
+                collect_warnings_inner(s, store, warnings, total_cost, false);
+            }
+            collect_warnings_inner(target, store, warnings, total_cost, false);
+        }
+        CompositionNode::Retry { stage, .. } => {
+            // Retry wraps Fallible — suppress FallibleWithoutRetry for direct child
+            collect_warnings_inner(stage, store, warnings, total_cost, true);
+            // Remove any FallibleWithoutRetry that was just added for the immediate child
+            if let CompositionNode::Stage { id } = stage.as_ref() {
+                warnings.retain(|w| !matches!(w, EffectWarning::FallibleWithoutRetry { stage_id } if stage_id == id));
+            }
+        }
     }
 }
 
@@ -122,6 +534,11 @@ fn check_node(
 ) -> Option<ResolvedType> {
     match node {
         CompositionNode::Stage { id } => check_stage(id, store, errors),
+        // Const: accepts Any input, emits Any output (actual type is inferred from value at runtime)
+        CompositionNode::Const { .. } => Some(ResolvedType {
+            input: NType::Any,
+            output: NType::Any,
+        }),
         CompositionNode::Sequential { stages } => check_sequential(stages, store, errors),
         CompositionNode::Parallel { branches } => check_parallel(branches, store, errors),
         CompositionNode::Branch {
@@ -376,6 +793,7 @@ fn check_merge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noether_core::capability::Capability;
     use noether_core::effects::EffectSet;
     use noether_core::stage::{CostEstimate, Stage, StageSignature};
     use noether_store::MemoryStore;
@@ -436,9 +854,9 @@ mod tests {
     fn check_single_stage() {
         let store = test_store();
         let result = check_graph(&stage("text_to_num"), &store);
-        let resolved = result.unwrap();
-        assert_eq!(resolved.input, NType::Text);
-        assert_eq!(resolved.output, NType::Number);
+        let check = result.unwrap();
+        assert_eq!(check.resolved.input, NType::Text);
+        assert_eq!(check.resolved.output, NType::Number);
     }
 
     #[test]
@@ -457,9 +875,9 @@ mod tests {
             stages: vec![stage("text_to_num"), stage("num_to_bool")],
         };
         let result = check_graph(&node, &store);
-        let resolved = result.unwrap();
-        assert_eq!(resolved.input, NType::Text);
-        assert_eq!(resolved.output, NType::Bool);
+        let check = result.unwrap();
+        assert_eq!(check.resolved.input, NType::Text);
+        assert_eq!(check.resolved.output, NType::Bool);
     }
 
     #[test]
@@ -488,11 +906,11 @@ mod tests {
             ]),
         };
         let result = check_graph(&node, &store);
-        let resolved = result.unwrap();
+        let check = result.unwrap();
         // Input is Record { bools: Text, nums: Text }
         // Output is Record { bools: Bool, nums: Number }
-        assert!(matches!(resolved.input, NType::Record(_)));
-        assert!(matches!(resolved.output, NType::Record(_)));
+        assert!(matches!(check.resolved.input, NType::Record(_)));
+        assert!(matches!(check.resolved.output, NType::Record(_)));
     }
 
     #[test]
@@ -507,8 +925,8 @@ mod tests {
         // Both branches take Text, so input matches
         // Outputs are Number and Text, which union into Number | Text
         let result = check_graph(&node, &store);
-        let resolved = result.unwrap();
-        assert_eq!(resolved.input, NType::Text);
+        let check = result.unwrap();
+        assert_eq!(check.resolved.input, NType::Text);
     }
 
     #[test]
@@ -520,8 +938,45 @@ mod tests {
             delay_ms: Some(100),
         };
         let result = check_graph(&node, &store);
-        let resolved = result.unwrap();
-        assert_eq!(resolved.input, NType::Text);
-        assert_eq!(resolved.output, NType::Number);
+        let check = result.unwrap();
+        assert_eq!(check.resolved.input, NType::Text);
+        assert_eq!(check.resolved.output, NType::Number);
+    }
+
+    #[test]
+    fn capability_policy_allow_all_passes() {
+        let mut store = test_store();
+        let mut stage_net = make_stage("net_stage", NType::Text, NType::Text);
+        stage_net.capabilities.insert(Capability::Network);
+        store.put(stage_net).unwrap();
+
+        let policy = CapabilityPolicy::allow_all();
+        let violations = check_capabilities(&stage("net_stage"), &store, &policy);
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn capability_policy_restrict_blocks_network() {
+        let mut store = test_store();
+        let mut stage_net = make_stage("net_stage2", NType::Text, NType::Text);
+        stage_net.capabilities.insert(Capability::Network);
+        store.put(stage_net).unwrap();
+
+        let policy = CapabilityPolicy::restrict([Capability::FsRead]);
+        let violations = check_capabilities(&stage("net_stage2"), &store, &policy);
+        assert_eq!(violations.len(), 1);
+        assert!(matches!(violations[0].required, Capability::Network));
+    }
+
+    #[test]
+    fn capability_policy_restrict_allows_declared() {
+        let mut store = test_store();
+        let mut stage_net = make_stage("net_stage3", NType::Text, NType::Text);
+        stage_net.capabilities.insert(Capability::Network);
+        store.put(stage_net).unwrap();
+
+        let policy = CapabilityPolicy::restrict([Capability::Network]);
+        let violations = check_capabilities(&stage("net_stage3"), &store, &policy);
+        assert!(violations.is_empty());
     }
 }

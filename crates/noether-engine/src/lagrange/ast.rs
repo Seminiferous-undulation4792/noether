@@ -9,11 +9,17 @@ pub enum CompositionNode {
     /// Leaf node: reference to a stage by its content hash.
     Stage { id: StageId },
 
+    /// Emits a constant JSON value, ignoring its input entirely.
+    /// Used to inject literal strings, numbers, or objects into a pipeline.
+    Const { value: serde_json::Value },
+
     /// A >> B >> C: output of each stage feeds the next.
     Sequential { stages: Vec<CompositionNode> },
 
-    /// Execute branches concurrently, merge outputs into a Record
-    /// keyed by branch name.
+    /// Execute branches concurrently, merge outputs into a Record keyed by
+    /// branch name. Each branch receives `input[branch_name]` if the input is
+    /// a Record containing that key; otherwise it receives the full input.
+    /// `Const` branches ignore their input entirely — use them for literals.
     Parallel {
         branches: BTreeMap<String, CompositionNode>,
     },
@@ -73,6 +79,7 @@ pub fn collect_stage_ids(node: &CompositionNode) -> Vec<&StageId> {
 fn collect_ids_recursive<'a>(node: &'a CompositionNode, ids: &mut Vec<&'a StageId>) {
     match node {
         CompositionNode::Stage { id } => ids.push(id),
+        CompositionNode::Const { .. } => {} // no stage IDs in a constant
         CompositionNode::Sequential { stages } => {
             for s in stages {
                 collect_ids_recursive(s, ids);

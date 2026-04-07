@@ -86,6 +86,19 @@ impl StageStore for JsonFileStore {
         Ok(id)
     }
 
+    fn upsert(&mut self, stage: Stage) -> Result<StageId, StoreError> {
+        let id = stage.id.clone();
+        self.stages.insert(id.0.clone(), stage);
+        self.save()?;
+        Ok(id)
+    }
+
+    fn remove(&mut self, id: &StageId) -> Result<(), StoreError> {
+        self.stages.remove(&id.0);
+        self.save()?;
+        Ok(())
+    }
+
     fn get(&self, id: &StageId) -> Result<Option<&Stage>, StoreError> {
         Ok(self.stages.get(&id.0))
     }

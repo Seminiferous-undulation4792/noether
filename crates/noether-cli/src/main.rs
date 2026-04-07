@@ -2,7 +2,10 @@ mod commands;
 mod output;
 
 use clap::{Parser, Subcommand};
+use ed25519_dalek::SigningKey;
+use noether_core::capability::Capability;
 use noether_core::stdlib::load_stdlib;
+use noether_engine::checker::CapabilityPolicy;
 use noether_engine::index::{IndexConfig, SemanticIndex};
 use noether_engine::providers;
 use noether_engine::trace::JsonFileTraceStore;
@@ -41,11 +44,32 @@ enum Commands {
         /// Input data as JSON string (default: null)
         #[arg(long)]
         input: Option<String>,
+        /// Comma-separated list of capabilities to grant (e.g. network,fs-read).
+        /// Default: all capabilities are allowed.
+        #[arg(long)]
+        allow_capabilities: Option<String>,
+        /// Reject compositions whose estimated cost exceeds this value (in cents).
+        #[arg(long)]
+        budget_cents: Option<u64>,
     },
     /// Retrieve execution trace for a past composition
     Trace {
         /// The composition ID (hash)
         composition_id: String,
+    },
+    /// Compile a composition graph into a self-contained binary
+    Build {
+        /// Path to the Lagrange graph JSON file
+        graph: String,
+        /// Output binary path (default: ./noether-app)
+        #[arg(short, long, default_value = "./noether-app")]
+        output: String,
+        /// Override the binary name used in ACLI output and --help (default: output filename)
+        #[arg(long)]
+        name: Option<String>,
+        /// One-line description shown in the binary's --help (default: graph description)
+        #[arg(long)]
+        description: Option<String>,
     },
     /// Compose a solution from a problem description using the Composition Agent
     Compose {
@@ -64,6 +88,13 @@ enum Commands {
         /// Bypass the composition cache and always call the LLM
         #[arg(long)]
         force: bool,
+        /// Comma-separated list of capabilities to grant (e.g. network,fs-read).
+        /// Default: all capabilities are allowed.
+        #[arg(long)]
+        allow_capabilities: Option<String>,
+        /// Reject compositions whose estimated cost exceeds this value (in cents).
+        #[arg(long)]
+        budget_cents: Option<u64>,
     },
 }
 
@@ -104,6 +135,23 @@ enum StoreCommands {
         #[arg(long, default_value_t = 0.92)]
         threshold: f32,
     },
+    /// Find near-duplicate stages and optionally tombstone confirmed duplicates
+    Dedup {
+        /// Cosine similarity threshold — pairs above this are shown (default: 0.90)
+        #[arg(long, default_value_t = 0.90)]
+        threshold: f32,
+        /// Tombstone the lower-scored stage in each duplicate pair
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Infer and apply effects for stages currently marked Unknown
+    MigrateEffects {
+        /// Show the migration plan without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Audit store health: signatures, lifecycle, orphans, examples
+    Health,
 }
 
 fn noether_dir() -> std::path::PathBuf {
@@ -126,9 +174,44 @@ fn init_store() -> JsonFileStore {
         JsonFileStore::open("/dev/null").unwrap()
     });
 
-    // Always upsert stdlib stages so updates to stdlib are applied automatically.
+    // Always upsert stdlib stages so updates to stdlib (including new signatures)
+    // are applied automatically, replacing any old unsigned copies.
+    // Exception: if a stdlib stage has been explicitly tombstoned, preserve that
+    // decision — tombstone is a permanent administrative action.
+    let stdlib_ids: std::collections::HashSet<String> = load_stdlib()
+        .iter()
+        .map(|s| s.id.0.clone())
+        .collect();
     for stage in load_stdlib() {
-        let _ = store.put(stage);
+        let already_tombstoned = store
+            .get(&stage.id)
+            .ok()
+            .flatten()
+            .map(|s| matches!(s.lifecycle, noether_core::stage::StageLifecycle::Tombstone))
+            .unwrap_or(false);
+        if !already_tombstoned {
+            let _ = store.upsert(stage);
+        }
+    }
+
+    // Purge legacy unsigned non-stdlib stages: these were synthesized before signing
+    // was implemented and would fail verify_signatures. Removing them forces fresh
+    // synthesis with a properly signed stage on the next compose call.
+    let unsigned_non_stdlib: Vec<noether_core::stage::StageId> = store
+        .list(None)
+        .iter()
+        .filter(|s| s.ed25519_signature.is_none() && !stdlib_ids.contains(&s.id.0))
+        .map(|s| s.id.clone())
+        .collect();
+
+    if !unsigned_non_stdlib.is_empty() {
+        eprintln!(
+            "init_store: removing {} unsigned legacy synthesized stage(s) from store",
+            unsigned_non_stdlib.len()
+        );
+        for id in &unsigned_non_stdlib {
+            let _ = store.remove(id);
+        }
     }
 
     store
@@ -142,6 +225,38 @@ fn init_trace_store() -> JsonFileTraceStore {
     })
 }
 
+/// Load the author signing key from `~/.noether/author-key.hex`, generating
+/// and saving it if it does not exist yet.
+fn load_or_create_author_key(dir: &std::path::Path) -> SigningKey {
+    use rand::rngs::OsRng;
+    let key_path = dir.join("author-key.hex");
+    if key_path.exists() {
+        let hex = std::fs::read_to_string(&key_path).unwrap_or_default();
+        let bytes = hex::decode(hex.trim()).unwrap_or_default();
+        if bytes.len() == 32 {
+            let arr: [u8; 32] = bytes.try_into().expect("checked length");
+            return SigningKey::from_bytes(&arr);
+        }
+        eprintln!("Warning: author key at {} is corrupt — regenerating.", key_path.display());
+    }
+    let key = SigningKey::generate(&mut OsRng);
+    let hex = hex::encode(key.to_bytes());
+    if let Err(e) = std::fs::create_dir_all(dir)
+        .and_then(|_| std::fs::write(&key_path, &hex))
+    {
+        eprintln!("Warning: could not save author key to {}: {e}", key_path.display());
+    } else {
+        eprintln!(
+            "Generated new author signing key → {}\n\
+             Public key: {}\n\
+             Back this file up — stages you sign are tied to it.",
+            key_path.display(),
+            hex::encode(key.verifying_key().to_bytes()),
+        );
+    }
+    key
+}
+
 fn build_index(store: &dyn StageStore) -> SemanticIndex {
     let (provider, name) = providers::build_embedding_provider();
     if name != "mock" {
@@ -152,11 +267,37 @@ fn build_index(store: &dyn StageStore) -> SemanticIndex {
         // No caching needed for mock
         SemanticIndex::build(store, provider, IndexConfig::default()).unwrap()
     } else {
-        // Use cached embeddings for real providers
+        // Use cached embeddings for real providers; fall back to mock on auth failure
         let cache_path = noether_dir().join("embeddings.json");
         let cached =
             noether_engine::index::cache::CachedEmbeddingProvider::new(provider, cache_path);
-        SemanticIndex::build_cached(store, cached, IndexConfig::default()).unwrap()
+        SemanticIndex::build_cached(store, cached, IndexConfig::default()).unwrap_or_else(|e| {
+            eprintln!("Warning: embedding provider unavailable ({e}), using mock index.");
+            let mock = noether_engine::index::embedding::MockEmbeddingProvider::new(128);
+            SemanticIndex::build(store, Box::new(mock), IndexConfig::default()).unwrap()
+        })
+    }
+}
+
+/// Parse a comma-separated capability list into a `CapabilityPolicy`.
+/// `None` (flag not provided) → allow all.
+fn parse_capability_policy(raw: Option<&str>) -> CapabilityPolicy {
+    match raw {
+        None => CapabilityPolicy::allow_all(),
+        Some(s) => {
+            let caps = s.split(',').filter_map(|token| match token.trim() {
+                "network" => Some(Capability::Network),
+                "fs-read" => Some(Capability::FsRead),
+                "fs-write" => Some(Capability::FsWrite),
+                "gpu" => Some(Capability::Gpu),
+                "llm" => Some(Capability::Llm),
+                other => {
+                    eprintln!("Warning: unknown capability '{other}', ignoring");
+                    None
+                }
+            });
+            CapabilityPolicy::restrict(caps)
+        }
     }
 }
 
@@ -183,7 +324,11 @@ fn main() {
                     let index = build_index(&store);
                     commands::stage::cmd_search(&store, &index, &query);
                 }
-                StageCommands::Add { spec } => commands::stage::cmd_add(&mut store, &spec),
+                StageCommands::Add { spec } => {
+                    let author_key = load_or_create_author_key(&noether_dir());
+                    let index = build_index(&store);
+                    commands::stage::cmd_add(&mut store, &spec, &author_key, &index);
+                }
                 StageCommands::List => commands::stage::cmd_list(&store),
                 StageCommands::Get { hash } => commands::stage::cmd_get(&store, &hash),
             }
@@ -191,10 +336,24 @@ fn main() {
         Commands::Store { command } => {
             let mut store = init_store();
             match command {
-                StoreCommands::Stats => commands::store::cmd_stats(&store),
+                StoreCommands::Stats => {
+                    let index = build_index(&store);
+                    commands::store::cmd_stats(&store, &index);
+                }
                 StoreCommands::Retro { dry_run, apply, threshold } => {
                     let index = build_index(&store);
                     commands::store::cmd_retro(&mut store, &index, dry_run, apply, threshold);
+                }
+                StoreCommands::MigrateEffects { dry_run } => {
+                    let (llm, _) = providers::build_llm_provider();
+                    commands::store::cmd_migrate_effects(&mut store, llm.as_ref(), dry_run);
+                }
+                StoreCommands::Health => {
+                    commands::store::cmd_health(&store);
+                }
+                StoreCommands::Dedup { threshold, apply } => {
+                    let index = build_index(&store);
+                    commands::store::cmd_dedup(&mut store, &index, threshold, apply);
                 }
             }
         }
@@ -202,17 +361,37 @@ fn main() {
             graph,
             dry_run,
             input,
+            allow_capabilities,
+            budget_cents,
         } => {
             let store = init_store();
             let input_value = input
                 .as_deref()
                 .map(|s| serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())))
                 .unwrap_or(serde_json::Value::Null);
-            commands::run::cmd_run(&store, &graph, dry_run, &input_value);
+            let policy = parse_capability_policy(allow_capabilities.as_deref());
+            commands::run::cmd_run(&store, &graph, dry_run, &input_value, &policy, budget_cents);
         }
         Commands::Trace { composition_id } => {
             let trace_store = init_trace_store();
             commands::trace::cmd_trace(&trace_store, &composition_id);
+        }
+        Commands::Build {
+            graph,
+            output,
+            name,
+            description,
+        } => {
+            let store = init_store();
+            commands::build::cmd_build(
+                &store,
+                commands::build::BuildOptions {
+                    graph_path: &graph,
+                    output_path: &output,
+                    app_name: name.as_deref(),
+                    description: description.as_deref(),
+                },
+            );
         }
         Commands::Compose {
             problem,
@@ -220,6 +399,8 @@ fn main() {
             dry_run,
             input,
             force,
+            allow_capabilities,
+            budget_cents,
         } => {
             let mut store = init_store();
             let mut index = build_index(&store);
@@ -239,6 +420,7 @@ fn main() {
                 .unwrap_or(serde_json::Value::Null);
 
             let cache_path = noether_dir().join("compositions.json");
+            let policy = parse_capability_policy(allow_capabilities.as_deref());
 
             commands::compose::cmd_compose(
                 &mut store,
@@ -251,6 +433,8 @@ fn main() {
                     input: &input_value,
                     force,
                     cache_path: &cache_path,
+                    policy: &policy,
+                    budget_cents,
                 },
             );
         }

@@ -1,11 +1,121 @@
-use crate::output::{acli_error, acli_error_hint, acli_ok};
-use noether_core::stage::{Stage, StageId};
+use crate::output::{acli_error, acli_error_hint, acli_error_hints, acli_ok};
+use ed25519_dalek::SigningKey;
+use noether_core::effects::{Effect, EffectSet};
+use noether_core::stage::{
+    sign_stage_id, verify_stage_signature, Example, Stage, StageBuilder, StageId,
+};
+use noether_core::types::NType;
 use noether_engine::index::SemanticIndex;
 use noether_store::{StageStore, StoreError};
 use serde_json::json;
 use std::fs;
 
-pub fn cmd_add(store: &mut impl StageStore, spec_path: &str) {
+/// Human-friendly spec format for `noether stage add` — parsed from JSON,
+/// not a Rust struct (the `Value` parsing above handles it).
+/// Parse the spec file — supports both the simple `StageSpec` format and the
+/// full serialised `Stage` format (for importing existing stages).
+fn parse_spec(content: &str) -> Result<Stage, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(content).map_err(|e| format!("invalid JSON: {e}"))?;
+
+    // Simple spec format: has "name" + "implementation" but no "id".
+    if v.get("name").is_some() && v.get("implementation").is_some() && v.get("id").is_none() {
+        let name = v["name"]
+            .as_str()
+            .ok_or("missing 'name'")?
+            .to_string();
+        let description = v
+            .get("description")
+            .and_then(|d| d.as_str())
+            .unwrap_or(&name)
+            .to_string();
+        let input: NType = serde_json::from_value(v["input"].clone())
+            .map_err(|e| format!("invalid input type: {e}"))?;
+        let output: NType = serde_json::from_value(v["output"].clone())
+            .map_err(|e| format!("invalid output type: {e}"))?;
+
+        let effects_raw: Vec<String> = v
+            .get("effects")
+            .and_then(|e| e.as_array())
+            .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let effects: Vec<Effect> = effects_raw
+            .iter()
+            .filter_map(|s| match s.as_str() {
+                "Pure" => Some(Effect::Pure),
+                "Network" => Some(Effect::Network),
+                "Fallible" => Some(Effect::Fallible),
+                "NonDeterministic" => Some(Effect::NonDeterministic),
+                other => {
+                    eprintln!("Warning: unknown effect '{other}', ignoring.");
+                    None
+                }
+            })
+            .collect();
+
+        let effect_set = if effects.is_empty() {
+            EffectSet::pure()
+        } else {
+            EffectSet::new(effects)
+        };
+
+        let code = if v["implementation"].is_string() {
+            v["implementation"]
+                .as_str()
+                .ok_or("missing implementation code")?
+        } else {
+            v["implementation"]["code"]
+                .as_str()
+                .ok_or("missing implementation.code")?
+        };
+        let language = if v["implementation"].is_string() {
+            v.get("language").and_then(|l| l.as_str()).unwrap_or("python")
+        } else {
+            v["implementation"]["language"]
+                .as_str()
+                .ok_or("missing implementation.language")?
+        };
+
+        // Compute the implementation hash from the code (SHA-256 hex).
+        let impl_hash = {
+            use sha2::{Digest, Sha256};
+            hex::encode(Sha256::digest(code.as_bytes()))
+        };
+
+        let examples: Vec<Example> = v
+            .get("examples")
+            .and_then(|e| e.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|ex| serde_json::from_value::<Example>(ex.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut builder = StageBuilder::new(&name)
+            .description(&description)
+            .input(input)
+            .output(output)
+            .effects(effect_set)
+            .implementation_code(code, language);
+
+        for ex in examples {
+            builder = builder.example(ex.input, ex.output);
+        }
+
+        let stage = builder
+            .build_unsigned(impl_hash)
+            .map_err(|e| format!("invalid spec: {e}"))?;
+
+        return Ok(stage);
+    }
+
+    // Fall back to the full Stage JSON format.
+    serde_json::from_str::<Stage>(content).map_err(|e| format!("invalid stage JSON: {e}"))
+}
+
+pub fn cmd_add(store: &mut impl StageStore, spec_path: &str, author_key: &SigningKey, index: &SemanticIndex) {
     let content = match fs::read_to_string(spec_path) {
         Ok(c) => c,
         Err(e) => {
@@ -14,13 +124,103 @@ pub fn cmd_add(store: &mut impl StageStore, spec_path: &str) {
         }
     };
 
-    let stage: Stage = match serde_json::from_str(&content) {
+    let mut stage: Stage = match parse_spec(&content) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("{}", acli_error(&format!("invalid stage JSON: {e}")));
+            eprintln!("{}", acli_error(&e));
             std::process::exit(1);
         }
     };
+
+    // ── Pre-insertion dedup check ─────────────────────────────────────────
+    // Reject if a semantically near-identical stage with the same type
+    // signature already exists; otherwise emit a warning and allow.
+    if let Ok(similar) = index.search(&stage.description, 3) {
+        for hit in &similar {
+            if hit.score < 0.92 {
+                break; // results are sorted descending
+            }
+            if let Ok(Some(existing)) = store.get(&hit.stage_id) {
+                let types_match = existing.signature.input == stage.signature.input
+                    && existing.signature.output == stage.signature.output;
+                if types_match {
+                    eprintln!(
+                        "{}",
+                        acli_error_hints(
+                            "near-duplicate stage already exists (similarity ≥ 0.92, same types)",
+                            Some("Use the existing stage or change the type signature to register a distinct variant."),
+                            Some(vec![
+                                format!("existing id:   {}", existing.id.0),
+                                format!("similarity:    {:.3}", hit.score),
+                                format!("description:   {}", existing.description),
+                            ]),
+                        )
+                    );
+                    std::process::exit(1);
+                } else {
+                    // Same semantics, different types → allowed, but warn
+                    eprintln!(
+                        "Warning: similar stage exists (similarity {:.3}) but types differ — \
+                         registering as a distinct variant (id: {}).",
+                        hit.score,
+                        &existing.id.0[..8.min(existing.id.0.len())],
+                    );
+                }
+            }
+        }
+    }
+
+    // ── Signing pipeline ──────────────────────────────────────────────────
+    match (&stage.ed25519_signature, &stage.signer_public_key) {
+        (Some(sig_hex), Some(pub_hex)) => {
+            // Stage is pre-signed — verify before accepting.
+            match verify_stage_signature(&stage.id, sig_hex, pub_hex) {
+                Ok(true) => {} // valid, proceed
+                Ok(false) => {
+                    eprintln!(
+                        "{}",
+                        acli_error_hints(
+                            "signature verification failed",
+                            Some("The stage may have been tampered with after signing."),
+                            Some(vec![
+                                format!("stage id:    {}", stage.id.0),
+                                format!("signer key:  {pub_hex}"),
+                            ]),
+                        )
+                    );
+                    std::process::exit(2);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{}",
+                        acli_error(&format!("could not decode signature: {e}"))
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+        (None, None) => {
+            // Unsigned stage — sign with the local author key.
+            let sig_hex = sign_stage_id(&stage.id, author_key);
+            let pub_hex = hex::encode(author_key.verifying_key().to_bytes());
+            eprintln!(
+                "Stage is unsigned — signing with local author key (public: {}).",
+                &pub_hex[..16]
+            );
+            stage.ed25519_signature = Some(sig_hex);
+            stage.signer_public_key = Some(pub_hex);
+        }
+        _ => {
+            eprintln!(
+                "{}",
+                acli_error(
+                    "malformed stage: exactly one of ed25519_signature / signer_public_key is set; \
+                     both must be present or both must be absent"
+                )
+            );
+            std::process::exit(2);
+        }
+    }
 
     match store.put(stage) {
         Ok(id) => println!("{}", acli_ok(json!({"id": id.0}))),

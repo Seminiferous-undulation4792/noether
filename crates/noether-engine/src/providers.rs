@@ -92,7 +92,7 @@ pub fn build_llm_provider() -> (Box<dyn LlmProvider>, &'static str) {
                     Ok(p) => (p, "vertex"),
                     Err(e) => {
                         eprintln!("Warning: No LLM provider configured ({e}). Using mock.");
-                        eprintln!("Set VERTEX_AI_TOKEN or NOETHER_LLM_PROVIDER to configure.");
+                        eprintln!("Set GOOGLE_APPLICATION_CREDENTIALS, run `gcloud auth application-default login`, or set VERTEX_AI_TOKEN.");
                         (Box::new(MockLlmProvider::new("{}")), "mock")
                     }
                 }

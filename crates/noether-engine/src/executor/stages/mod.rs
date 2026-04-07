@@ -2,6 +2,7 @@ pub mod collections;
 pub mod control;
 pub mod data;
 pub mod io;
+pub mod kv;
 pub mod scalar;
 pub mod text;
 
@@ -79,6 +80,13 @@ pub fn find_implementation(description: &str) -> Option<StageFn> {
         "Make an HTTP PUT request" => Some(io::http_put),
         "Extract the body text from an HTTP response record" => Some(io::http_body),
         "Extract the status code from an HTTP response record" => Some(io::http_status),
+
+        // KV store
+        "Store a JSON value under a key in the persistent key-value store; returns \"ok\"" => Some(kv::kv_set),
+        "Retrieve a JSON value by key from the persistent key-value store; returns null if not found" => Some(kv::kv_get),
+        "Delete a key from the persistent key-value store; returns true if the key existed" => Some(kv::kv_delete),
+        "Check whether a key exists in the persistent key-value store" => Some(kv::kv_exists),
+        "List all keys in the persistent key-value store that start with a given prefix" => Some(kv::kv_list),
 
         _ => None,
     }

@@ -1,7 +1,10 @@
-use crate::output::{acli_error, acli_ok};
+use crate::output::{acli_error, acli_error_hints, acli_ok, acli_ok_cached};
 use noether_engine::agent::SynthesisResult;
-use noether_engine::checker::check_graph;
+use noether_engine::checker::{
+    check_capabilities, check_graph, collect_effect_warnings, verify_signatures, CapabilityPolicy,
+};
 use noether_engine::composition_cache::CompositionCache;
+use acli::output::CacheMeta;
 use noether_engine::executor::composite::CompositeExecutor;
 use noether_engine::executor::runner::run_composition;
 use noether_engine::index::SemanticIndex;
@@ -19,6 +22,9 @@ pub struct ComposeOptions<'a> {
     pub input: &'a serde_json::Value,
     pub force: bool,
     pub cache_path: &'a Path,
+    pub policy: &'a CapabilityPolicy,
+    /// Maximum total cost in cents. `None` = no limit.
+    pub budget_cents: Option<u64>,
 }
 
 pub fn cmd_compose(
@@ -42,14 +48,17 @@ pub fn cmd_compose(
                 "Cache hit (model: {}, composed: {}s ago). Use --force to recompose.",
                 cached.model, age_secs,
             );
-            emit_result(store, EmitCtx {
+                    emit_result(store, EmitCtx {
                 model: opts.model,
                 dry_run: opts.dry_run,
                 input: opts.input,
                 from_cache: true,
+                cache_age_secs: age_secs,
                 attempts: 0,
                 synthesized: &[],
                 graph: &cached.graph.clone(),
+                policy: opts.policy,
+                budget_cents: opts.budget_cents,
             });
             return;
         }
@@ -82,9 +91,12 @@ pub fn cmd_compose(
         dry_run: opts.dry_run,
         input: opts.input,
         from_cache: false,
+        cache_age_secs: 0,
         attempts,
         synthesized: &synthesized,
         graph: &graph,
+        policy: opts.policy,
+        budget_cents: opts.budget_cents,
     });
 }
 
@@ -93,9 +105,13 @@ struct EmitCtx<'a> {
     dry_run: bool,
     input: &'a serde_json::Value,
     from_cache: bool,
+    /// Age of the cached entry in seconds (0 when not from cache).
+    cache_age_secs: u64,
     attempts: u32,
     synthesized: &'a [SynthesisResult],
     graph: &'a CompositionGraph,
+    policy: &'a CapabilityPolicy,
+    budget_cents: Option<u64>,
 }
 
 fn emit_result(store: &mut dyn StageStore, ctx: EmitCtx<'_>) {
@@ -114,8 +130,73 @@ fn emit_result(store: &mut dyn StageStore, ctx: EmitCtx<'_>) {
         })
         .collect();
 
-    let resolved = check_graph(&ctx.graph.root, store).ok();
+    let check_result = check_graph(&ctx.graph.root, store).ok();
     let plan = plan_graph(&ctx.graph.root, store);
+
+    // Capability pre-flight
+    let violations = check_capabilities(&ctx.graph.root, store, ctx.policy);
+    if !violations.is_empty() {
+        let msgs: Vec<String> = violations.iter().map(|v| format!("{v}")).collect();
+        eprintln!(
+            "{}",
+            acli_error_hints(
+                &format!("{} capability violation(s)", msgs.len()),
+                None,
+                Some(msgs),
+            )
+        );
+        std::process::exit(2);
+    }
+
+    // Signature verification pre-flight
+    let sig_violations = verify_signatures(&ctx.graph.root, store);
+    if !sig_violations.is_empty() {
+        let msgs: Vec<String> = sig_violations.iter().map(|v| format!("{v}")).collect();
+        eprintln!(
+            "{}",
+            acli_error_hints(
+                &format!("{} signature violation(s)", msgs.len()),
+                None,
+                Some(msgs),
+            )
+        );
+        std::process::exit(2);
+    }
+
+    // Effect warnings (includes budget enforcement)
+    let effect_warnings = collect_effect_warnings(&ctx.graph.root, store, ctx.budget_cents);
+    let budget_errors: Vec<String> = effect_warnings
+        .iter()
+        .filter(|w| {
+            matches!(
+                w,
+                noether_engine::checker::EffectWarning::CostBudgetExceeded { .. }
+            )
+        })
+        .map(|w| format!("{w}"))
+        .collect();
+    if !budget_errors.is_empty() {
+        eprintln!(
+            "{}",
+            acli_error_hints("composition exceeds cost budget", None, Some(budget_errors))
+        );
+        std::process::exit(2);
+    }
+
+    let warning_strings: Vec<String> = {
+        let mut ws: Vec<String> = check_result
+            .as_ref()
+            .map(|r| r.warnings.iter().map(|w| format!("{w}")).collect())
+            .unwrap_or_default();
+        // Include non-budget effect warnings too
+        for w in &effect_warnings {
+            let s = format!("{w}");
+            if !ws.contains(&s) {
+                ws.push(s);
+            }
+        }
+        ws
+    };
 
     if ctx.dry_run {
         println!(
@@ -127,15 +208,16 @@ fn emit_result(store: &mut dyn StageStore, ctx: EmitCtx<'_>) {
                 "from_cache": ctx.from_cache,
                 "synthesized": synthesized_json,
                 "graph": serde_json::from_str::<serde_json::Value>(&graph_json).unwrap_or(json!(null)),
-                "type_check": resolved.as_ref().map(|r| json!({
-                    "input": format!("{}", r.input),
-                    "output": format!("{}", r.output),
+                "type_check": check_result.as_ref().map(|r| json!({
+                    "input": format!("{}", r.resolved.input),
+                    "output": format!("{}", r.resolved.output),
                 })),
                 "plan": {
                     "steps": plan.steps.len(),
                     "parallel_groups": plan.parallel_groups.len(),
                     "cost": plan.cost,
                 },
+                "warnings": warning_strings,
             }))
         );
         return;
@@ -159,18 +241,25 @@ fn emit_result(store: &mut dyn StageStore, ctx: EmitCtx<'_>) {
 
     match run_composition(&ctx.graph.root, ctx.input, &executor, &composition_id) {
         Ok(exec_result) => {
-            println!(
-                "{}",
-                acli_ok(json!({
-                    "composition_id": composition_id,
-                    "attempts": ctx.attempts,
-                    "from_cache": ctx.from_cache,
-                    "synthesized": synthesized_json,
-                    "graph": serde_json::from_str::<serde_json::Value>(&graph_json).unwrap_or(json!(null)),
-                    "output": exec_result.output,
-                    "trace": exec_result.trace,
-                }))
-            );
+            let data = json!({
+                "composition_id": composition_id,
+                "attempts": ctx.attempts,
+                "from_cache": ctx.from_cache,
+                "synthesized": synthesized_json,
+                "graph": serde_json::from_str::<serde_json::Value>(&graph_json).unwrap_or(json!(null)),
+                "output": exec_result.output,
+                "trace": exec_result.trace,
+                "warnings": warning_strings,
+            });
+            if ctx.from_cache {
+                println!("{}", acli_ok_cached(data, CacheMeta {
+                    hit: true,
+                    key: Some(composition_id.clone()),
+                    age_seconds: Some(ctx.cache_age_secs),
+                }));
+            } else {
+                println!("{}", acli_ok(data));
+            }
         }
         Err(e) => {
             eprintln!("{}", acli_error(&format!("execution failed: {e}")));

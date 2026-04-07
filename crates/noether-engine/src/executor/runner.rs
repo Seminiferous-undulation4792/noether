@@ -1,6 +1,8 @@
 use super::{ExecutionError, StageExecutor};
+use crate::executor::pure_cache::PureStageCache;
 use crate::lagrange::CompositionNode;
 use crate::trace::{CompositionTrace, StageStatus, StageTrace, TraceStatus};
+use chrono::Utc;
 use noether_core::stage::StageId;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -14,17 +16,41 @@ pub struct CompositionResult {
 }
 
 /// Execute a composition graph using the provided executor.
-pub fn run_composition(
+///
+/// Pass a `PureStageCache` to enable Pure-stage output caching within this run.
+pub fn run_composition<E: StageExecutor + Sync>(
     node: &CompositionNode,
     input: &Value,
-    executor: &impl StageExecutor,
+    executor: &E,
     composition_id: &str,
+) -> Result<CompositionResult, ExecutionError> {
+    run_composition_with_cache(node, input, executor, composition_id, None)
+}
+
+/// Like `run_composition` but accepts an explicit `PureStageCache`.
+pub fn run_composition_with_cache<E: StageExecutor + Sync>(
+    node: &CompositionNode,
+    input: &Value,
+    executor: &E,
+    composition_id: &str,
+    cache: Option<&mut PureStageCache>,
 ) -> Result<CompositionResult, ExecutionError> {
     let start = Instant::now();
     let mut stage_traces = Vec::new();
     let mut step_counter = 0;
 
-    let output = execute_node(node, input, executor, &mut stage_traces, &mut step_counter)?;
+    let mut owned_cache;
+    let cache_ref: &mut Option<&mut PureStageCache>;
+    let mut none_holder: Option<&mut PureStageCache> = None;
+
+    if let Some(c) = cache {
+        owned_cache = Some(c);
+        cache_ref = &mut owned_cache;
+    } else {
+        cache_ref = &mut none_holder;
+    }
+
+    let output = execute_node(node, input, executor, &mut stage_traces, &mut step_counter, cache_ref)?;
 
     let duration_ms = start.elapsed().as_millis() as u64;
     let has_failures = stage_traces
@@ -33,7 +59,7 @@ pub fn run_composition(
 
     let trace = CompositionTrace {
         composition_id: composition_id.into(),
-        started_at: "2026-04-05T10:00:00Z".into(), // simplified for Phase 2
+        started_at: Utc::now().to_rfc3339(),
         duration_ms,
         status: if has_failures {
             TraceStatus::Failed
@@ -41,39 +67,82 @@ pub fn run_composition(
             TraceStatus::Ok
         },
         stages: stage_traces,
+        security_events: Vec::new(),
+        warnings: Vec::new(),
     };
 
     Ok(CompositionResult { output, trace })
 }
 
-fn execute_node(
+fn execute_node<E: StageExecutor + Sync>(
     node: &CompositionNode,
     input: &Value,
-    executor: &impl StageExecutor,
+    executor: &E,
     traces: &mut Vec<StageTrace>,
     step_counter: &mut usize,
+    cache: &mut Option<&mut PureStageCache>,
 ) -> Result<Value, ExecutionError> {
     match node {
-        CompositionNode::Stage { id } => execute_stage(id, input, executor, traces, step_counter),
+        CompositionNode::Stage { id } => execute_stage(id, input, executor, traces, step_counter, cache),
+        CompositionNode::Const { value } => Ok(value.clone()),
         CompositionNode::Sequential { stages } => {
             let mut current = input.clone();
             for stage in stages {
-                current = execute_node(stage, &current, executor, traces, step_counter)?;
+                current = execute_node(stage, &current, executor, traces, step_counter, cache)?;
             }
             Ok(current)
         }
         CompositionNode::Parallel { branches } => {
+            // Resolve each branch's input before spawning (pure field lookup).
+            // If the input is a Record containing the branch name as a key,
+            // that field's value is passed to the branch. Otherwise the full
+            // input is passed — this lets Stage branches receive the pipeline
+            // input naturally while Const branches ignore it entirely.
+            let branch_data: Vec<(&str, &CompositionNode, Value)> = branches
+                .iter()
+                .map(|(name, branch)| {
+                    let branch_input = if let Value::Object(ref obj) = input {
+                        obj.get(name).cloned().unwrap_or_else(|| input.clone())
+                    } else {
+                        input.clone()
+                    };
+                    (name.as_str(), branch, branch_input)
+                })
+                .collect();
+
+            // Execute all branches concurrently. Each branch gets its own
+            // trace list; the Pure cache is NOT shared across parallel branches
+            // to avoid any locking overhead.
+            let branch_results = std::thread::scope(|s| {
+                let handles: Vec<_> = branch_data
+                    .iter()
+                    .map(|(name, branch, branch_input)| {
+                        s.spawn(move || {
+                            let mut branch_traces = Vec::new();
+                            let mut branch_counter = 0usize;
+                            let result = execute_node(
+                                branch,
+                                branch_input,
+                                executor,
+                                &mut branch_traces,
+                                &mut branch_counter,
+                                &mut None,
+                            );
+                            (*name, result, branch_traces)
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("parallel branch panicked"))
+                    .collect::<Vec<_>>()
+            });
+
             let mut output_fields = serde_json::Map::new();
-            for (name, branch) in branches {
-                // Each branch gets its corresponding field from the input record
-                let branch_input = if let Value::Object(ref obj) = input {
-                    obj.get(name).cloned().unwrap_or(Value::Null)
-                } else {
-                    input.clone()
-                };
-                let branch_output =
-                    execute_node(branch, &branch_input, executor, traces, step_counter)?;
-                output_fields.insert(name.clone(), branch_output);
+            for (name, result, branch_traces) in branch_results {
+                let branch_output = result?;
+                output_fields.insert(name.to_string(), branch_output);
+                traces.extend(branch_traces);
             }
             Ok(Value::Object(output_fields))
         }
@@ -82,22 +151,22 @@ fn execute_node(
             if_true,
             if_false,
         } => {
-            let pred_result = execute_node(predicate, input, executor, traces, step_counter)?;
+            let pred_result = execute_node(predicate, input, executor, traces, step_counter, cache)?;
             let condition = match &pred_result {
                 Value::Bool(b) => *b,
                 _ => false,
             };
             if condition {
-                execute_node(if_true, input, executor, traces, step_counter)
+                execute_node(if_true, input, executor, traces, step_counter, cache)
             } else {
-                execute_node(if_false, input, executor, traces, step_counter)
+                execute_node(if_false, input, executor, traces, step_counter, cache)
             }
         }
         CompositionNode::Fanout { source, targets } => {
-            let source_output = execute_node(source, input, executor, traces, step_counter)?;
+            let source_output = execute_node(source, input, executor, traces, step_counter, cache)?;
             let mut results = Vec::new();
             for target in targets {
-                let result = execute_node(target, &source_output, executor, traces, step_counter)?;
+                let result = execute_node(target, &source_output, executor, traces, step_counter, cache)?;
                 results.push(result);
             }
             Ok(Value::Array(results))
@@ -112,7 +181,7 @@ fn execute_node(
                 } else {
                     input.clone()
                 };
-                let result = execute_node(source, &source_input, executor, traces, step_counter)?;
+                let result = execute_node(source, &source_input, executor, traces, step_counter, cache)?;
                 merged.insert(format!("source_{i}"), result);
             }
             execute_node(
@@ -121,6 +190,7 @@ fn execute_node(
                 executor,
                 traces,
                 step_counter,
+                cache,
             )
         }
         CompositionNode::Retry {
@@ -130,7 +200,7 @@ fn execute_node(
         } => {
             let mut last_err = None;
             for _ in 0..*max_attempts {
-                match execute_node(stage, input, executor, traces, step_counter) {
+                match execute_node(stage, input, executor, traces, step_counter, cache) {
                     Ok(output) => return Ok(output),
                     Err(e) => last_err = Some(e),
                 }
@@ -143,18 +213,36 @@ fn execute_node(
     }
 }
 
-fn execute_stage(
+fn execute_stage<E: StageExecutor + Sync>(
     id: &StageId,
     input: &Value,
-    executor: &impl StageExecutor,
+    executor: &E,
     traces: &mut Vec<StageTrace>,
     step_counter: &mut usize,
+    cache: &mut Option<&mut PureStageCache>,
 ) -> Result<Value, ExecutionError> {
     let step_index = *step_counter;
     *step_counter += 1;
     let start = Instant::now();
 
     let input_hash = hash_value(input);
+
+    // Pure cache check: skip execution if we have a cached output for this stage + input.
+    if let Some(ref mut c) = cache {
+        if let Some(cached_output) = c.get(id, input) {
+            let output = cached_output.clone();
+            let duration_ms = start.elapsed().as_millis() as u64;
+            traces.push(StageTrace {
+                stage_id: id.clone(),
+                step_index,
+                status: StageStatus::Ok,
+                duration_ms,
+                input_hash: Some(input_hash),
+                output_hash: Some(hash_value(&output)),
+            });
+            return Ok(output);
+        }
+    }
 
     match executor.execute(id, input) {
         Ok(output) => {
@@ -168,6 +256,10 @@ fn execute_stage(
                 input_hash: Some(input_hash),
                 output_hash: Some(output_hash),
             });
+            // Store result in Pure cache for future calls within this run.
+            if let Some(ref mut c) = cache {
+                c.put(id, input, output.clone());
+            }
             Ok(output)
         }
         Err(e) => {

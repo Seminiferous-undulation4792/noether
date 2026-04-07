@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ACLI Success Envelope",
+  "description": "Standard success response envelope per ACLI spec §2.2",
+  "type": "object",
+  "required": ["ok", "command", "meta"],
+  "properties": {
+    "ok": { "type": "boolean", "const": true },
+    "command": { "type": "string", "description": "The command that produced this response" },
+    "data": { "description": "The primary result payload; shape varies by command" },
+    "dry_run": { "type": "boolean" },
+    "planned_actions": { "type": "array" },
+    "meta": {
+      "type": "object",
+      "required": ["duration_ms", "version"],
+      "properties": {
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "version": { "type": "string" },
+        "cache": {
+          "type": "object",
+          "required": ["hit"],
+          "properties": {
+            "hit": { "type": "boolean" },
+            "key": { "type": "string" },
+            "age_seconds": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

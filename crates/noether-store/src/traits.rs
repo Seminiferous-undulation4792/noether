@@ -28,6 +28,11 @@ pub struct StoreStats {
 /// Abstraction over stage storage.
 pub trait StageStore {
     fn put(&mut self, stage: Stage) -> Result<StageId, StoreError>;
+    /// Insert a stage, replacing any existing stage with the same ID.
+    /// Used to upgrade unsigned stdlib stages after signing is added.
+    fn upsert(&mut self, stage: Stage) -> Result<StageId, StoreError>;
+    /// Remove a stage entirely. Returns `Ok(())` whether or not the stage existed.
+    fn remove(&mut self, id: &StageId) -> Result<(), StoreError>;
     fn get(&self, id: &StageId) -> Result<Option<&Stage>, StoreError>;
     fn contains(&self, id: &StageId) -> bool;
     fn list(&self, lifecycle: Option<&StageLifecycle>) -> Vec<&Stage>;

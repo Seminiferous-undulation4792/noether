@@ -2,6 +2,7 @@ pub mod composite;
 pub mod inline;
 pub mod mock;
 pub mod nix;
+pub mod pure_cache;
 pub mod runner;
 pub mod runtime;
 pub mod stages;

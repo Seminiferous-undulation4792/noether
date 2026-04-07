@@ -1,5 +1,6 @@
 pub use acli::{CommandInfo, CommandTree, ExitCode};
 
+use acli::output::CacheMeta;
 use acli::{error_envelope, success_envelope};
 use serde_json::Value;
 
@@ -7,22 +8,34 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Format an ACLI success envelope as JSON string.
 pub fn acli_ok(data: Value) -> String {
-    let envelope = success_envelope("noether", data, VERSION, None);
+    let envelope = success_envelope("noether", data, VERSION, None, None);
+    serde_json::to_string_pretty(&envelope).unwrap()
+}
+
+/// Format an ACLI success envelope with cache metadata as JSON string.
+pub fn acli_ok_cached(data: Value, cache: CacheMeta) -> String {
+    let envelope = success_envelope("noether", data, VERSION, None, Some(cache));
     serde_json::to_string_pretty(&envelope).unwrap()
 }
 
 /// Format an ACLI error envelope as JSON string.
 pub fn acli_error(message: &str) -> String {
-    acli_error_hint(message, None)
+    acli_error_hints(message, None, None)
 }
 
-/// Format an ACLI error envelope with an optional hint as JSON string.
+/// Format an ACLI error envelope with an optional single hint as JSON string.
 pub fn acli_error_hint(message: &str, hint: Option<&str>) -> String {
+    acli_error_hints(message, hint, None)
+}
+
+/// Format an ACLI error envelope with an optional hint and structured hints list.
+pub fn acli_error_hints(message: &str, hint: Option<&str>, hints: Option<Vec<String>>) -> String {
     let envelope = error_envelope(
         "noether",
         ExitCode::GeneralError,
         message,
         hint,
+        hints,
         None,
         VERSION,
         None,
@@ -105,8 +118,23 @@ pub fn build_command_tree() -> CommandTree {
         ("Preview duplicates without changes", "noether store retro --dry-run"),
         ("Apply suggested deprecations", "noether store retro --apply"),
     ]);
+    let store_migrate = CommandInfo::new(
+        "migrate-effects",
+        "Infer and apply effects for stages currently marked Unknown",
+    )
+    .add_option(
+        "dry-run",
+        "bool",
+        "Show the migration plan without applying changes",
+        None,
+    )
+    .idempotent(false)
+    .with_examples(vec![
+        ("Preview what would be inferred", "noether store migrate-effects --dry-run"),
+        ("Apply inferred effects", "noether store migrate-effects"),
+    ]);
     let mut store_cmd = CommandInfo::new("store", "Store management commands");
-    store_cmd.subcommands = vec![store_stats, store_retro];
+    store_cmd.subcommands = vec![store_stats, store_retro, store_migrate];
     tree.add_command(store_cmd);
 
     // Run command
@@ -125,10 +153,26 @@ pub fn build_command_tree() -> CommandTree {
                 "Input data as JSON string passed to the composition (default: null)",
                 Some(serde_json::json!(null)),
             )
+            .add_option_with_version(
+                "allow-capabilities",
+                "string",
+                "Comma-separated capabilities to grant (e.g. network,fs-read). Default: all allowed.",
+                Some(serde_json::json!(null)),
+                Some("0.1.0"),
+                None,
+            )
+            .add_option(
+                "budget-cents",
+                "number",
+                "Reject compositions whose estimated cost exceeds this value in cents.",
+                None,
+            )
             .with_examples(vec![
                 ("Execute a graph", "noether run graph.json"),
                 ("Dry-run only", "noether run --dry-run graph.json"),
                 ("Pass input data", "noether run --input '{\"key\":\"value\"}' graph.json"),
+                ("Restrict to network only", "noether run --allow-capabilities network graph.json"),
+                ("Cap cost at 10 cents", "noether run --budget-cents 10 graph.json"),
             ]),
     );
 
@@ -170,10 +214,26 @@ pub fn build_command_tree() -> CommandTree {
             "Input data as JSON string passed to the composition (default: null)",
             Some(serde_json::json!(null)),
         )
-        .add_option(
+        .add_option_with_version(
             "force",
             "bool",
             "Bypass the composition cache and always call the LLM",
+            None,
+            Some("0.1.0"),
+            None,
+        )
+        .add_option_with_version(
+            "allow-capabilities",
+            "string",
+            "Comma-separated capabilities to grant (e.g. network,fs-read). Default: all allowed.",
+            Some(serde_json::json!(null)),
+            Some("0.1.0"),
+            None,
+        )
+        .add_option(
+            "budget-cents",
+            "number",
+            "Reject compositions whose estimated cost exceeds this value in cents.",
             None,
         )
         .with_examples(vec![
@@ -188,6 +248,58 @@ pub fn build_command_tree() -> CommandTree {
             (
                 "Pass input data and force re-composition",
                 "noether compose --force --input '[1,3,2]' \"sort a list\"",
+            ),
+        ]),
+    );
+
+    // Build command
+    tree.add_command(
+        CommandInfo::new(
+            "build",
+            "Compile a composition graph into a self-contained standalone binary",
+        )
+        .add_argument(
+            "graph",
+            "path",
+            "Path to the Lagrange graph JSON file",
+            true,
+        )
+        .add_option(
+            "output",
+            "path",
+            "Output binary path (default: ./noether-app)",
+            Some(serde_json::json!("./noether-app")),
+        )
+        .add_option(
+            "name",
+            "string",
+            "Override the binary name used in ACLI output and --help",
+            None,
+        )
+        .add_option(
+            "description",
+            "string",
+            "One-line description shown in the binary's --help",
+            None,
+        )
+        .add_option(
+            "serve",
+            "string",
+            "Address to bind when running the built binary as an HTTP microservice (e.g. :8080)",
+            None,
+        )
+        .with_examples(vec![
+            (
+                "Build a rail-search binary from a graph",
+                "noether build rail-search.json -o ./rail-search",
+            ),
+            (
+                "Build with a custom name and description",
+                "noether build graph.json -o ./my-app --name my-app --description 'Sorts a list'",
+            ),
+            (
+                "Run the built binary as an HTTP microservice",
+                "./rail-search --serve :8080",
             ),
         ]),
     );

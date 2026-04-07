@@ -167,16 +167,10 @@ impl NixExecutor {
         Ok(path)
     }
 
-    /// Nix package name for the given language.
-    fn nixpkgs_runtime(language: &str) -> &'static str {
-        match language {
-            "javascript" | "js" => "nodejs",
-            "bash" | "sh" => "bash",
-            _ => "python3",
-        }
-    }
-
-    /// Run the stage script via `nix run nixpkgs#<runtime> -- <script>` with JSON on stdin.
+    /// Run the stage script via Nix with JSON on stdin.
+    ///
+    /// For Python stages, auto-detects third-party imports and passes them as
+    /// Nix packages via `nix shell ... --command python3 script.py`.
     fn run_script(
         &self,
         stage_id: &StageId,
@@ -184,18 +178,21 @@ impl NixExecutor {
         language: &str,
         input: &Value,
     ) -> Result<Value, ExecutionError> {
-        let runtime = Self::nixpkgs_runtime(language);
         let input_json = serde_json::to_string(input).unwrap_or_default();
 
+        let code = self
+            .implementations
+            .get(&stage_id.0)
+            .map(|i| i.code.as_str())
+            .unwrap_or("");
+
+        let (nix_subcommand, args) =
+            Self::build_nix_command(language, script, code);
+
         let mut child = Command::new(&self.nix_bin)
-            .args([
-                "run",
-                "--no-write-lock-file",
-                "--quiet",
-                &format!("nixpkgs#{runtime}"),
-                "--",
-                script.to_str().unwrap_or("/dev/null"),
-            ])
+            .arg(nix_subcommand)
+            .args(["--no-write-lock-file", "--quiet"])
+            .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -231,6 +228,99 @@ impl NixExecutor {
         })
     }
 
+    /// Build the nix subcommand + argument list for running a stage script.
+    ///
+    /// - Python with no third-party imports: `nix run nixpkgs#python3 -- script.py`
+    /// - Python with third-party imports:    `nix shell nixpkgs#python3 nixpkgs#python3Packages.X ... --command python3 script.py`
+    /// - JS/Bash: `nix run nixpkgs#<runtime> -- script`
+    fn build_nix_command(language: &str, script: &Path, code: &str) -> (&'static str, Vec<String>) {
+        let script_path = script.to_str().unwrap_or("/dev/null").to_string();
+
+        match language {
+            "python" | "python3" | "" => {
+                let extra_pkgs = Self::detect_python_packages(code);
+                if extra_pkgs.is_empty() {
+                    (
+                        "run",
+                        vec![
+                            "nixpkgs#python3".into(),
+                            "--".into(),
+                            script_path,
+                        ],
+                    )
+                } else {
+                    // Use `nix shell` with only the third-party packages.
+                    // Do NOT also include nixpkgs#python3 — each python3Packages.*
+                    // already depends on python3, and mixing both into the same
+                    // shell creates a conflicting Python environment where the
+                    // packages are invisible to the bare python3 binary.
+                    let mut args: Vec<String> = extra_pkgs
+                        .iter()
+                        .map(|pkg| format!("nixpkgs#python3Packages.{pkg}"))
+                        .collect();
+                    args.extend_from_slice(&["--command".into(), "python3".into(), script_path]);
+                    ("shell", args)
+                }
+            }
+            "javascript" | "js" => (
+                "run",
+                vec!["nixpkgs#nodejs".into(), "--".into(), script_path],
+            ),
+            _ => (
+                "run",
+                vec!["nixpkgs#bash".into(), "--".into(), script_path],
+            ),
+        }
+    }
+
+    /// Scan Python source for `import X` / `from X import` statements and return
+    /// the Nix package names for any recognised third-party libraries.
+    fn detect_python_packages(code: &str) -> Vec<&'static str> {
+        // Map of Python import name → nixpkgs python3Packages attribute name.
+        const KNOWN: &[(&str, &str)] = &[
+            ("requests",  "requests"),
+            ("httpx",     "httpx"),
+            ("aiohttp",   "aiohttp"),
+            ("bs4",       "beautifulsoup4"),
+            ("lxml",      "lxml"),
+            ("pandas",    "pandas"),
+            ("numpy",     "numpy"),
+            ("scipy",     "scipy"),
+            ("sklearn",   "scikit-learn"),
+            ("PIL",       "Pillow"),
+            ("cv2",       "opencv4"),
+            ("yaml",      "pyyaml"),
+            ("toml",      "toml"),
+            ("dateutil",  "python-dateutil"),
+            ("pytz",      "pytz"),
+            ("boto3",     "boto3"),
+            ("psycopg2",  "psycopg2"),
+            ("pymongo",   "pymongo"),
+            ("redis",     "redis"),
+            ("celery",    "celery"),
+            ("fastapi",   "fastapi"),
+            ("pydantic",  "pydantic"),
+            ("cryptography", "cryptography"),
+            ("jwt",       "pyjwt"),
+            ("paramiko",  "paramiko"),
+            ("dotenv",    "python-dotenv"),
+        ];
+
+        let mut found: Vec<&'static str> = Vec::new();
+        for (import_name, nix_name) in KNOWN {
+            let patterns = [
+                format!("import {import_name}"),
+                format!("import {import_name} "),
+                format!("from {import_name} "),
+                format!("from {import_name}."),
+            ];
+            if patterns.iter().any(|p| code.contains(p.as_str())) {
+                found.push(nix_name);
+            }
+        }
+        found
+    }
+
     // ── Language wrappers ───────────────────────────────────────────────────
 
     fn wrap_python(user_code: &str) -> String {
@@ -243,8 +333,15 @@ impl NixExecutor {
 
 if __name__ == '__main__':
     try:
-        _input = _json.loads(sys.stdin.read())
-        _output = execute(_input)
+        _raw = _json.loads(sys.stdin.read())
+        # If the runtime passed input as a JSON-encoded string, decode it once more.
+        # This happens when input arrives as null or a bare string from the CLI.
+        if isinstance(_raw, str):
+            try:
+                _raw = _json.loads(_raw)
+            except Exception:
+                pass
+        _output = execute(_raw if _raw is not None else {{}})
         print(_json.dumps(_output))
     except Exception as _e:
         print(str(_e), file=sys.stderr)
@@ -308,6 +405,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn detect_python_packages_requests() {
+        let code = "import requests\ndef execute(v):\n    return requests.get(v).json()";
+        let pkgs = NixExecutor::detect_python_packages(code);
+        assert!(pkgs.contains(&"requests"), "expected 'requests' in {pkgs:?}");
+    }
+
+    #[test]
+    fn detect_python_packages_stdlib_only() {
+        let code = "import urllib.request, json\ndef execute(v):\n    return json.loads(v)";
+        let pkgs = NixExecutor::detect_python_packages(code);
+        assert!(pkgs.is_empty(), "stdlib imports should not trigger packages: {pkgs:?}");
+    }
+
+    #[test]
+    fn detect_python_packages_multiple() {
+        let code = "import pandas\nimport numpy as np\nfrom bs4 import BeautifulSoup\ndef execute(v): pass";
+        let pkgs = NixExecutor::detect_python_packages(code);
+        assert!(pkgs.contains(&"pandas"));
+        assert!(pkgs.contains(&"numpy"));
+        assert!(pkgs.contains(&"beautifulsoup4"));
+    }
+
+    #[test]
+    fn build_nix_command_no_packages() {
+        use std::path::Path;
+        let (sub, args) = NixExecutor::build_nix_command("python", Path::new("/tmp/x.py"), "import json");
+        assert_eq!(sub, "run");
+        assert!(args.iter().any(|a| a.contains("python3")));
+        assert!(!args.iter().any(|a| a.contains("shell")));
+    }
+
+    #[test]
+    fn build_nix_command_with_requests() {
+        use std::path::Path;
+        let (sub, args) = NixExecutor::build_nix_command("python", Path::new("/tmp/x.py"), "import requests");
+        assert_eq!(sub, "shell");
+        assert!(args.iter().any(|a| a.contains("python3Packages.requests")));
+        assert!(args.iter().any(|a| a == "--command"));
+        // Must NOT include bare nixpkgs#python3 — it conflicts with python3Packages.*
+        assert!(!args.iter().any(|a| a == "nixpkgs#python3"), "bare python3 conflicts: {args:?}");
+    }
+
+    #[test]
     fn python_wrapper_contains_boilerplate() {
         let wrapped = NixExecutor::wrap_python("def execute(x):\n    return x + 1");
         assert!(wrapped.contains("sys.stdin.read()"));
@@ -324,9 +464,8 @@ mod tests {
         assert_ne!(h1, h3);
     }
 
-    /// Integration test — only runs when nix is available on the CI/dev machine.
+    /// Integration test — runs when nix is available (skips gracefully if not).
     #[test]
-    #[ignore = "requires nix"]
     fn nix_python_identity_stage() {
         let nix_bin = match NixExecutor::find_nix() {
             Some(p) => p,

@@ -4,12 +4,13 @@ use crate::checker::check_graph;
 use crate::index::SemanticIndex;
 use crate::lagrange::{parse_graph, CompositionGraph};
 use crate::llm::{LlmConfig, LlmProvider, Message};
+use ed25519_dalek::SigningKey;
 use noether_core::stage::validation::infer_type;
 use noether_core::stage::{StageBuilder, StageId, StageLifecycle};
 use noether_core::types::{is_subtype_of, TypeCompatibility};
 use noether_store::{StageStore, StoreError};
 use prompt::{
-    build_synthesis_prompt, build_system_prompt, extract_json, extract_synthesis_response,
+    build_effect_inference_prompt, build_synthesis_prompt, build_system_prompt, extract_effect_response, extract_json, extract_synthesis_response,
     extract_synthesis_spec, SynthesisSpec,
 };
 
@@ -67,6 +68,9 @@ pub struct CompositionAgent<'a> {
     llm: &'a dyn LlmProvider,
     llm_config: LlmConfig,
     max_retries: u32,
+    /// Ephemeral Ed25519 key generated at construction; used to sign all stages
+    /// synthesized during this agent session.
+    ephemeral_signing_key: SigningKey,
 }
 
 impl<'a> CompositionAgent<'a> {
@@ -81,6 +85,7 @@ impl<'a> CompositionAgent<'a> {
             llm,
             llm_config,
             max_retries,
+            ephemeral_signing_key: SigningKey::generate(&mut rand::rngs::OsRng),
         }
     }
 
@@ -121,9 +126,11 @@ impl<'a> CompositionAgent<'a> {
                 let sp = build_system_prompt(&candidates);
                 let um = match synthesized.last() {
                     Some(syn) => format!(
-                        "{problem}\n\nNote: stage `{}` was just synthesized and is now \
-                         available in the Available Stages list above.",
-                        syn.stage_id.0
+                        "{problem}\n\nIMPORTANT: Stage `{id}` has been synthesized and added to \
+                         the Available Stages list above. Now output a COMPOSITION GRAPH (not \
+                         another synthesis request) that uses this stage. Output ONLY a JSON \
+                         code block containing the CompositionGraph.",
+                        id = syn.stage_id.0
                     ),
                     None => problem.to_string(),
                 };
@@ -138,6 +145,11 @@ impl<'a> CompositionAgent<'a> {
 
             for attempt in 1..=self.max_retries {
                 let response = self.llm.complete(&messages, &self.llm_config)?;
+
+                // Optional raw-response debug output.
+                if std::env::var("NOETHER_DEBUG").is_ok() {
+                    eprintln!("[agent debug] attempt {attempt} raw response:\n---\n{response}\n---");
+                }
 
                 // Check for synthesis request (only once per compose call).
                 if !synthesis_done {
@@ -162,6 +174,21 @@ impl<'a> CompositionAgent<'a> {
                         did_synthesize_this_round = true;
                         break; // break inner loop → outer loop retries
                     }
+                } else if extract_synthesis_spec(&response).is_some() {
+                    // Synthesis already done but LLM returned another synthesis request.
+                    // Redirect: ask it to produce a composition graph using the new stage.
+                    let stage_id = synthesized.last().map(|s| s.stage_id.0.as_str()).unwrap_or("the newly synthesized stage");
+                    last_error_type = LastErrorType::InvalidGraph;
+                    last_errors = "synthesis already performed".into();
+                    if attempt < self.max_retries {
+                        messages.push(Message::assistant(&response));
+                        messages.push(Message::user(format!(
+                            "The new stage has already been synthesized (id: `{stage_id}`). \
+                             Now produce a COMPOSITION GRAPH (not another synthesis request) \
+                             that uses this stage. Output ONLY a JSON code block."
+                        )));
+                    }
+                    continue;
                 }
 
                 // Normal composition path.
@@ -188,8 +215,16 @@ impl<'a> CompositionAgent<'a> {
                         last_error_type = LastErrorType::InvalidGraph;
                         if attempt < self.max_retries {
                             messages.push(Message::assistant(&response));
+                            let hint = if last_errors.contains("missing field `op`") {
+                                " REMINDER: every node in the graph MUST have an \"op\" field \
+                                 (\"Stage\", \"Sequential\", \"Parallel\", \"Branch\", etc.). \
+                                 A synthesis request (\"action\": \"synthesize\") is NOT a valid \
+                                 graph node — it must be a standalone top-level response."
+                            } else {
+                                ""
+                            };
                             messages.push(Message::user(format!(
-                                "The JSON was not a valid CompositionGraph: {e}. \
+                                "The JSON was not a valid CompositionGraph: {e}.{hint} \
                                  Please fix and try again."
                             )));
                         }
@@ -275,17 +310,33 @@ impl<'a> CompositionAgent<'a> {
 
             let impl_hash = compute_impl_hash(&syn_resp.implementation);
 
+            // Effect inference: ask the LLM what effects the generated code has.
+            // On failure (or non-deterministic response) we fall back to Unknown gracefully.
+            let inferred_effects = {
+                let inference_prompt =
+                    build_effect_inference_prompt(&syn_resp.implementation, &syn_resp.language);
+                let inference_messages = vec![
+                    Message::system(&inference_prompt),
+                    Message::user("Analyze the code above and return the effects JSON array."),
+                ];
+                match self.llm.complete(&inference_messages, &self.llm_config) {
+                    Ok(resp) => extract_effect_response(&resp),
+                    Err(_) => noether_core::effects::EffectSet::unknown(),
+                }
+            };
+
             let mut builder = StageBuilder::new(&spec.name)
                 .input(spec.input.clone())
                 .output(spec.output.clone())
                 .description(&spec.description)
-                .implementation_code(&syn_resp.implementation, &syn_resp.language);
+                .implementation_code(&syn_resp.implementation, &syn_resp.language)
+                .effects(inferred_effects);
 
             for ex in &syn_resp.examples {
                 builder = builder.example(ex.input.clone(), ex.output.clone());
             }
 
-            let stage: noether_core::stage::Stage = match builder.build_unsigned(impl_hash) {
+            let stage: noether_core::stage::Stage = match builder.build_signed(&self.ephemeral_signing_key, impl_hash) {
                 Ok(s) => s,
                 Err(e) => {
                     last_error = e.to_string();
@@ -295,24 +346,40 @@ impl<'a> CompositionAgent<'a> {
 
             // Pre-insertion deduplication: if an existing stage is semantically
             // near-identical (>= 0.92 cosine on description), reuse it instead.
+            // Exception: if the existing stage has no signature, replace it with the
+            // newly signed version so that signature verification passes.
             if let Ok(Some((existing_id, similarity))) =
                 self.index.check_duplicate_before_insert(&spec.description, 0.92)
             {
+                let existing_is_signed = store
+                    .get(&existing_id)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.ed25519_signature.is_some())
+                    .unwrap_or(false);
+
+                if existing_is_signed {
+                    eprintln!(
+                        "Synthesis dedup: description matches existing stage {} \
+                         (similarity {similarity:.3}); reusing.",
+                        existing_id.0
+                    );
+                    return Ok(SynthesisResult {
+                        stage_id: existing_id,
+                        implementation: syn_resp.implementation,
+                        language: syn_resp.language,
+                        attempts: attempt,
+                        is_new: false,
+                    });
+                }
+                // Existing stage is unsigned — fall through to upsert with signed version.
                 eprintln!(
-                    "Synthesis dedup: description matches existing stage {} \
-                     (similarity {similarity:.3}); reusing.",
+                    "Synthesis dedup: existing stage {} is unsigned; replacing with signed version.",
                     existing_id.0
                 );
-                return Ok(SynthesisResult {
-                    stage_id: existing_id,
-                    implementation: syn_resp.implementation,
-                    language: syn_resp.language,
-                    attempts: attempt,
-                    is_new: false,
-                });
             }
 
-            let (stage_id, is_new) = match store.put(stage) {
+            let (stage_id, is_new) = match store.put(stage.clone()) {
                 Ok(id) => {
                     // Newly inserted as Draft — promote to Active.
                     store
@@ -320,8 +387,23 @@ impl<'a> CompositionAgent<'a> {
                         .map_err(|e| AgentError::SynthesisFailed(e.to_string()))?;
                     (id, true)
                 }
-                // A stage with the same signature already exists — reuse it.
-                Err(StoreError::AlreadyExists(id)) => (id, false),
+                // A stage with the same signature already exists.
+                // If the existing stage lacks a signature, replace it with the signed version.
+                Err(StoreError::AlreadyExists(id)) => {
+                    let needs_signing = store
+                        .get(&id)
+                        .ok()
+                        .flatten()
+                        .map(|s| s.ed25519_signature.is_none())
+                        .unwrap_or(false);
+                    if needs_signing {
+                        store
+                            .upsert(stage)
+                            .map_err(|e| AgentError::SynthesisFailed(e.to_string()))?;
+                        eprintln!("Synthesis: replaced unsigned stage {} with signed version.", id.0);
+                    }
+                    (id, false)
+                }
                 Err(e) => return Err(AgentError::SynthesisFailed(e.to_string())),
             };
 
@@ -596,6 +678,9 @@ mod tests {
             })
         );
 
+        // Round 2b (effect inference): LLM returns effect classification.
+        let effect_inference_response = "```json\n[\"Pure\"]\n```".to_string();
+
         // Round 3: LLM composes using the newly synthesized stage ID.
         // We use to_text as a stand-in since we don't know count_words ID yet.
         // The actual test verifies the graph passes type-check.
@@ -609,7 +694,7 @@ mod tests {
         );
 
         let llm = SequenceMockLlmProvider::new(
-            vec![synthesis_request, synthesis_response, composition],
+            vec![synthesis_request, synthesis_response, effect_inference_response, composition],
             "no more responses".to_string(),
         );
 
@@ -686,6 +771,69 @@ mod tests {
         );
     }
 
+    /// After synthesis, if the LLM keeps returning synthesis requests, the agent
+    /// redirects it to produce a composition graph.
+    #[test]
+    fn compose_redirects_after_duplicate_synthesis_request() {
+        use serde_json::json;
+
+        let (mut store, mut index) = test_setup();
+        let to_text_id = find_stage_id(&store, "Convert any value to its text");
+
+        let synthesis_request = format!(
+            "```json\n{}\n```",
+            json!({
+                "action": "synthesize",
+                "spec": {
+                    "name": "count_chars",
+                    "description": "Count characters in a string",
+                    "input": {"kind": "Text"},
+                    "output": {"kind": "Number"},
+                    "rationale": "No existing stage counts characters"
+                }
+            })
+        );
+        let codegen = format!(
+            "```json\n{}\n```",
+            json!({
+                "examples": [
+                    {"input": "hi", "output": 2.0},
+                    {"input": "hello", "output": 5.0},
+                    {"input": "world", "output": 5.0}
+                ],
+                "implementation": "def execute(v): return len(v)",
+                "language": "python"
+            })
+        );
+        let effect_resp = "```json\n[\"Pure\"]\n```".to_string();
+        // Second outer pass: LLM returns synthesis request again (bug scenario),
+        // then a valid graph on retry.
+        let graph = format!(
+            "```json\n{}\n```",
+            json!({
+                "description": "count chars",
+                "version": "0.1.0",
+                "root": {"op": "Stage", "id": to_text_id}
+            })
+        );
+
+        let llm = SequenceMockLlmProvider::new(
+            vec![
+                synthesis_request.clone(), // round 1: trigger synthesis
+                codegen,                   // codegen for synthesis
+                effect_resp,               // effect inference
+                synthesis_request,         // round 2 attempt 1: LLM repeats synthesis → redirect
+                graph,                     // round 2 attempt 2: proper graph
+            ],
+            String::new(),
+        );
+
+        let mut agent = CompositionAgent::new(&mut index, &llm, LlmConfig::default(), 3);
+        let result = agent.compose("count characters in text", &mut store);
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+        assert_eq!(result.unwrap().synthesized.len(), 1);
+    }
+
     /// Synthesis is idempotent: registering the same implementation twice does not error.
     #[test]
     fn synthesize_stage_is_idempotent() {
@@ -720,6 +868,8 @@ mod tests {
             })
         );
 
+        let effect_inference_response = "```json\n[\"Pure\"]\n```".to_string();
+
         let to_text_id = find_stage_id(&store, "Convert any value to its text");
         let graph_json = format!(
             "```json\n{}\n```",
@@ -736,6 +886,7 @@ mod tests {
                 vec![
                     synthesis_request.clone(),
                     codegen.clone(),
+                    effect_inference_response.clone(),
                     graph_json.clone(),
                 ],
                 String::new(),
@@ -747,7 +898,7 @@ mod tests {
         // Second compose with identical synthesis response — should not fail.
         {
             let llm = SequenceMockLlmProvider::new(
-                vec![synthesis_request, codegen, graph_json],
+                vec![synthesis_request, codegen, effect_inference_response, graph_json],
                 String::new(),
             );
             let mut agent = CompositionAgent::new(&mut index, &llm, LlmConfig::default(), 3);
