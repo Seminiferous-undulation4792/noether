@@ -1,0 +1,19 @@
+{
+  "description": "Search GitHub, Hacker News and crates.io in parallel, merge and format results",
+  "version": "0.1.0",
+  "root": {
+    "op": "Sequential",
+    "stages": [
+      {
+        "op": "Stage",
+        "id": "8dfa010b",
+        "_comment": "Search GitHub repos, HN stories and crates.io crates by keyword — returns merged ranked list"
+      },
+      {
+        "op": "Stage",
+        "id": "923a69d9",
+        "_comment": "Format a list of research results (name/title, url, description, score) into readable Markdown"
+      }
+    ]
+  }
+}

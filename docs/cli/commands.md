@@ -2,7 +2,41 @@
 
 All commands produce ACLI-compliant JSON on stdout. Exit code is `0` on success, non-zero on error.
 
-## `noether version`
+## Global flags
+
+These flags apply to every subcommand.
+
+### `--registry <URL>`
+
+```bash
+noether --registry https://registry.example.com stage list
+noether --registry https://registry.example.com compose "problem"
+NOETHER_REGISTRY=https://registry.example.com noether stage search "http get"
+```
+
+Points the CLI at a remote **noether-cloud** registry instead of the local JSON file store.
+
+When set, the CLI:
+
+1. **Fetches** all active stages from `GET /stages?lifecycle=active` and populates an in-memory cache.
+2. **Reads** (get, list, search, compose) from the local cache — no network latency on every operation.
+3. **Writes** (stage submit, lifecycle update) to both the remote registry and the local cache.
+
+The `NOETHER_REGISTRY` environment variable is the recommended way to configure this persistently:
+
+```bash
+export NOETHER_REGISTRY=https://registry.noether.example.com
+
+noether stage list          # reads from remote registry
+noether compose "problem"   # LLM-composed graph using remote stages
+noether run graph.json      # executes using remote stage metadata
+```
+
+See the [Remote Registry guide](../guides/remote-registry.md) for a full setup walkthrough.
+
+---
+
+
 
 ```bash
 noether version

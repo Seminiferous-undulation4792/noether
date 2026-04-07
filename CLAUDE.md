@@ -35,6 +35,11 @@ cargo run --bin noether -- trace <composition_id>    # retrieve past trace
 cargo run --bin noether -- compose "problem description"      # LLM-powered composition
 cargo run --bin noether -- compose --dry-run "problem"        # graph only, no execution
 cargo run --bin noether -- compose --model gemini-2.0-flash "problem"
+
+# Remote registry (noether-cloud)
+NOETHER_REGISTRY=http://localhost:8080 cargo run --bin noether -- stage list   # list from remote
+NOETHER_REGISTRY=http://localhost:8080 cargo run --bin noether -- compose "problem"  # compose with remote stages
+cargo run --bin noether -- --registry https://registry.example.com stage search "query"
 ```
 
 ## What Is Noether

@@ -115,7 +115,7 @@ fn parse_spec(content: &str) -> Result<Stage, String> {
     serde_json::from_str::<Stage>(content).map_err(|e| format!("invalid stage JSON: {e}"))
 }
 
-pub fn cmd_add(store: &mut impl StageStore, spec_path: &str, author_key: &SigningKey, index: &SemanticIndex) {
+pub fn cmd_add(store: &mut dyn StageStore, spec_path: &str, author_key: &SigningKey, index: &SemanticIndex) {
     let content = match fs::read_to_string(spec_path) {
         Ok(c) => c,
         Err(e) => {
@@ -234,7 +234,7 @@ pub fn cmd_add(store: &mut impl StageStore, spec_path: &str, author_key: &Signin
     }
 }
 
-pub fn cmd_get(store: &impl StageStore, hash: &str) {
+pub fn cmd_get(store: &dyn StageStore, hash: &str) {
     let id = StageId(hash.into());
     match store.get(&id) {
         Ok(Some(stage)) => {
@@ -261,7 +261,7 @@ pub fn cmd_get(store: &impl StageStore, hash: &str) {
 }
 
 /// Return a hint string if a stage ID starts with `prefix`.
-fn find_prefix_hint(store: &impl StageStore, prefix: &str) -> Option<String> {
+fn find_prefix_hint(store: &dyn StageStore, prefix: &str) -> Option<String> {
     if prefix.len() < 4 {
         return None;
     }
@@ -283,7 +283,7 @@ fn find_prefix_hint(store: &impl StageStore, prefix: &str) -> Option<String> {
     }
 }
 
-pub fn cmd_list(store: &impl StageStore) {
+pub fn cmd_list(store: &dyn StageStore) {
     let stages = store.list(None);
     let mut sorted: Vec<&Stage> = stages;
     sorted.sort_by(|a, b| a.description.cmp(&b.description));
@@ -306,7 +306,7 @@ pub fn cmd_list(store: &impl StageStore) {
     );
 }
 
-pub fn cmd_search(store: &impl StageStore, index: &SemanticIndex, query: &str) {
+pub fn cmd_search(store: &dyn StageStore, index: &SemanticIndex, query: &str) {
     let results = match index.search(query, 20) {
         Ok(r) => r,
         Err(e) => {

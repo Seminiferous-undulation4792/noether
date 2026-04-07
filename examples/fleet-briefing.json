@@ -1,0 +1,69 @@
+{
+  "description": "EV Fleet Morning Briefing — parallel fetch of charging station availability and weather forecast, rendered as an HTML briefing for fleet operators",
+  "version": "0.1.0",
+  "root": {
+    "op": "Sequential",
+    "stages": [
+      {
+        "op": "Parallel",
+        "branches": {
+          "stations": {
+            "op": "Sequential",
+            "stages": [
+              {
+                "op": "Stage",
+                "id": "b4dfc6b0",
+                "_comment": "text_template — builds OpenChargeMap API URL with lat/lon/radius from input.stations_config"
+              },
+              {
+                "op": "Stage",
+                "id": "39731ebb",
+                "_comment": "http_get — GET https://api.openchargemap.io/v3/poi/?..."
+              },
+              {
+                "op": "Stage",
+                "id": "62bdb044",
+                "_comment": "http_body — extract response body"
+              },
+              {
+                "op": "Stage",
+                "id": "b89d34eb",
+                "_comment": "parse_json — parse charging station POI list"
+              }
+            ]
+          },
+          "weather": {
+            "op": "Sequential",
+            "stages": [
+              {
+                "op": "Stage",
+                "id": "b4dfc6b0",
+                "_comment": "text_template — builds Open-Meteo URL with lat/lon/timezone from input.weather_config"
+              },
+              {
+                "op": "Stage",
+                "id": "39731ebb",
+                "_comment": "http_get — GET https://api.open-meteo.com/v1/forecast?..."
+              },
+              {
+                "op": "Stage",
+                "id": "62bdb044",
+                "_comment": "http_body"
+              },
+              {
+                "op": "Stage",
+                "id": "b89d34eb",
+                "_comment": "parse_json — parse hourly forecast"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "op": "Stage",
+        "id": "4bcc4817",
+        "_comment": "fleet_briefing_html — renders the parallel fetch results into an HTML morning briefing page for EV fleet operators"
+      }
+    ]
+  }
+}

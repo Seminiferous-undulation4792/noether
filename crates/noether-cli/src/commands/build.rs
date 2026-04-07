@@ -36,7 +36,7 @@ pub struct BuildOptions<'a> {
     pub description: Option<&'a str>,
 }
 
-pub fn cmd_build(store: &impl StageStore, opts: BuildOptions<'_>) {
+pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
     // ── 1. Parse graph ────────────────────────────────────────────────────────
     let graph_json = match std::fs::read_to_string(opts.graph_path) {
         Ok(s) => s,

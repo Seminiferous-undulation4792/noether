@@ -6,7 +6,7 @@ use noether_engine::llm::{LlmConfig, LlmProvider, Message};
 use noether_store::StageStore;
 use serde_json::json;
 
-pub fn cmd_stats(store: &impl StageStore, index: &SemanticIndex) {
+pub fn cmd_stats(store: &dyn StageStore, index: &SemanticIndex) {
     let stats = store.stats();
     let near_duplicate_pairs = index.find_near_duplicates(0.92).len();
     println!(
@@ -435,7 +435,7 @@ pub fn cmd_dedup(store: &mut dyn StageStore, index: &SemanticIndex, threshold: f
 /// - **tombstoned_active**: (reserved) tombstone invariant check placeholder.
 ///
 /// This command is read-only — it never modifies the store.
-pub fn cmd_health(store: &impl StageStore) {
+pub fn cmd_health(store: &dyn StageStore) {
     let all_stages = store.list(None);
     let stdlib_ids: std::collections::HashSet<String> = noether_core::stdlib::load_stdlib()
         .iter()

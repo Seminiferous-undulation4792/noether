@@ -8,6 +8,7 @@ pub mod lagrange;
 pub mod llm;
 pub mod planner;
 pub mod providers;
+pub mod registry_client;
 pub mod trace;
 
 pub use noether_core as core;

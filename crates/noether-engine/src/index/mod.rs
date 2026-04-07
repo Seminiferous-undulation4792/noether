@@ -49,6 +49,29 @@ pub struct SemanticIndex {
 }
 
 impl SemanticIndex {
+    /// Build the index from an owned list of stages (useful in async contexts
+    /// where holding a `&dyn StageStore` across `.await` is not possible).
+    pub fn from_stages(
+        stages: Vec<Stage>,
+        provider: Box<dyn EmbeddingProvider>,
+        config: IndexConfig,
+    ) -> Result<Self, EmbeddingError> {
+        let mut index = Self {
+            provider,
+            signature_index: SubIndex::new(),
+            semantic_index: SubIndex::new(),
+            example_index: SubIndex::new(),
+            config,
+        };
+        for stage in &stages {
+            if matches!(stage.lifecycle, StageLifecycle::Tombstone) {
+                continue;
+            }
+            index.add_stage(stage)?;
+        }
+        Ok(index)
+    }
+
     /// Build the index from all non-tombstoned stages in a store.
     pub fn build(
         store: &dyn StageStore,

@@ -5,6 +5,7 @@ pub mod io;
 pub mod kv;
 pub mod scalar;
 pub mod text;
+pub mod validation;
 
 use super::{ExecutionError, StageExecutor};
 use noether_core::stage::StageId;
@@ -87,6 +88,23 @@ pub fn find_implementation(description: &str) -> Option<StageFn> {
         "Delete a key from the persistent key-value store; returns true if the key existed" => Some(kv::kv_delete),
         "Check whether a key exists in the persistent key-value store" => Some(kv::kv_exists),
         "List all keys in the persistent key-value store that start with a given prefix" => Some(kv::kv_list),
+
+        // Validation pipeline (Rust-native, no Nix)
+        "Verify that a stage's content hash matches its declared ID" => {
+            Some(validation::verify_stage_content_hash)
+        }
+        "Verify the Ed25519 signature of a stage, if present" => {
+            Some(validation::verify_stage_ed25519)
+        }
+        "Check that a stage description is non-empty" => {
+            Some(validation::check_stage_description)
+        }
+        "Check that a stage has at least one example" => {
+            Some(validation::check_stage_examples)
+        }
+        "Aggregate stage validation check results into a report" => {
+            Some(validation::merge_validation_checks)
+        }
 
         _ => None,
     }

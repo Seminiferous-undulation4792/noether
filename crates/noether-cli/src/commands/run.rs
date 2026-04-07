@@ -10,7 +10,7 @@ use noether_store::StageStore;
 use serde_json::json;
 
 pub fn cmd_run(
-    store: &impl StageStore,
+    store: &dyn StageStore,
     graph_path: &str,
     dry_run: bool,
     input: &serde_json::Value,

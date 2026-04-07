@@ -87,8 +87,10 @@ nav:
     - Composition Graphs: guides/composition-graphs.md
     - LLM-Powered Compose: guides/llm-compose.md
     - Semantic Search: guides/semantic-search.md
+    - Remote Registry (noether-cloud): guides/remote-registry.md
   - Case Studies:
     - Four Search Engines: case-studies/search-engines.md
+    - Benchmark: case-studies/benchmark.md
   - Research:
     - NoetherReact: research/noether-react.md
     - WASM Target: research/wasm-target.md

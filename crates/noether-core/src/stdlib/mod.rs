@@ -7,6 +7,7 @@ mod kv;
 mod llm;
 mod scalar;
 mod text;
+mod validation;
 
 use crate::stage::Stage;
 use ed25519_dalek::SigningKey;
@@ -32,6 +33,7 @@ pub fn load_stdlib() -> Vec<Stage> {
     stages.extend(internal::stages(&key));
     stages.extend(text::stages(&key));
     stages.extend(kv::stages(&key));
+    stages.extend(validation::stages(&key));
     stages
 }
 
@@ -42,7 +44,7 @@ mod tests {
     #[test]
     fn load_stdlib_returns_50_stages() {
         let stages = load_stdlib();
-        assert_eq!(stages.len(), 70); // 65 + 5 KV stages
+        assert_eq!(stages.len(), 75); // 70 + 5 validation stages
     }
 
     #[test]

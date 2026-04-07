@@ -8,12 +8,19 @@ use noether_core::stdlib::load_stdlib;
 use noether_engine::checker::CapabilityPolicy;
 use noether_engine::index::{IndexConfig, SemanticIndex};
 use noether_engine::providers;
+use noether_engine::registry_client::RemoteStageStore;
 use noether_engine::trace::JsonFileTraceStore;
 use noether_store::{JsonFileStore, StageStore};
 
 #[derive(Parser)]
 #[command(name = "noether", about = "Agent-native verified composition platform")]
 struct Cli {
+    /// Remote registry URL (e.g. http://localhost:3000).
+    /// Also read from NOETHER_REGISTRY env var. When set, all stage/store
+    /// commands talk to the remote registry instead of the local file store.
+    #[arg(long, global = true, env = "NOETHER_REGISTRY")]
+    registry: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -163,7 +170,33 @@ fn noether_dir() -> std::path::PathBuf {
     }
 }
 
-fn init_store() -> JsonFileStore {
+/// Return the active store.
+///
+/// If `registry` is `Some(url)` (from `--registry` or `NOETHER_REGISTRY`),
+/// returns a `RemoteStageStore` connected to that URL, printing the stage count.
+/// Otherwise returns the local `JsonFileStore` with stdlib seeded.
+fn build_store(registry: Option<&str>) -> Box<dyn StageStore> {
+    if let Some(url) = registry {
+        let api_key = std::env::var("NOETHER_API_KEY").ok();
+        match RemoteStageStore::connect(url, api_key.as_deref()) {
+            Ok(remote) => {
+                eprintln!(
+                    "Connected to remote registry at {} ({} stages cached)",
+                    remote.base_url(),
+                    remote.list(None).len()
+                );
+                return Box::new(remote);
+            }
+            Err(e) => {
+                eprintln!("Warning: could not connect to registry at {url}: {e}");
+                eprintln!("Falling back to local store.");
+            }
+        }
+    }
+    Box::new(init_local_store())
+}
+
+fn init_local_store() -> JsonFileStore {
     let store_path = noether_dir().join("store.json");
     let mut store = JsonFileStore::open(&store_path).unwrap_or_else(|e| {
         eprintln!(
@@ -303,6 +336,8 @@ fn parse_capability_policy(raw: Option<&str>) -> CapabilityPolicy {
 
 fn main() {
     let cli = Cli::parse();
+    let registry = cli.registry.as_deref();
+
     match cli.command {
         Commands::Introspect => {
             let tree = output::build_command_tree();
@@ -318,42 +353,42 @@ fn main() {
             );
         }
         Commands::Stage { command } => {
-            let mut store = init_store();
+            let mut store = build_store(registry);
             match command {
                 StageCommands::Search { query } => {
-                    let index = build_index(&store);
-                    commands::stage::cmd_search(&store, &index, &query);
+                    let index = build_index(store.as_ref());
+                    commands::stage::cmd_search(store.as_ref(), &index, &query);
                 }
                 StageCommands::Add { spec } => {
                     let author_key = load_or_create_author_key(&noether_dir());
-                    let index = build_index(&store);
-                    commands::stage::cmd_add(&mut store, &spec, &author_key, &index);
+                    let index = build_index(store.as_ref());
+                    commands::stage::cmd_add(store.as_mut(), &spec, &author_key, &index);
                 }
-                StageCommands::List => commands::stage::cmd_list(&store),
-                StageCommands::Get { hash } => commands::stage::cmd_get(&store, &hash),
+                StageCommands::List => commands::stage::cmd_list(store.as_ref()),
+                StageCommands::Get { hash } => commands::stage::cmd_get(store.as_ref(), &hash),
             }
         }
         Commands::Store { command } => {
-            let mut store = init_store();
+            let mut store = build_store(registry);
             match command {
                 StoreCommands::Stats => {
-                    let index = build_index(&store);
-                    commands::store::cmd_stats(&store, &index);
+                    let index = build_index(store.as_ref());
+                    commands::store::cmd_stats(store.as_ref(), &index);
                 }
                 StoreCommands::Retro { dry_run, apply, threshold } => {
-                    let index = build_index(&store);
-                    commands::store::cmd_retro(&mut store, &index, dry_run, apply, threshold);
+                    let index = build_index(store.as_ref());
+                    commands::store::cmd_retro(store.as_mut(), &index, dry_run, apply, threshold);
                 }
                 StoreCommands::MigrateEffects { dry_run } => {
                     let (llm, _) = providers::build_llm_provider();
-                    commands::store::cmd_migrate_effects(&mut store, llm.as_ref(), dry_run);
+                    commands::store::cmd_migrate_effects(store.as_mut(), llm.as_ref(), dry_run);
                 }
                 StoreCommands::Health => {
-                    commands::store::cmd_health(&store);
+                    commands::store::cmd_health(store.as_ref());
                 }
                 StoreCommands::Dedup { threshold, apply } => {
-                    let index = build_index(&store);
-                    commands::store::cmd_dedup(&mut store, &index, threshold, apply);
+                    let index = build_index(store.as_ref());
+                    commands::store::cmd_dedup(store.as_mut(), &index, threshold, apply);
                 }
             }
         }
@@ -364,13 +399,20 @@ fn main() {
             allow_capabilities,
             budget_cents,
         } => {
-            let store = init_store();
+            let store = build_store(registry);
             let input_value = input
                 .as_deref()
                 .map(|s| serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())))
                 .unwrap_or(serde_json::Value::Null);
             let policy = parse_capability_policy(allow_capabilities.as_deref());
-            commands::run::cmd_run(&store, &graph, dry_run, &input_value, &policy, budget_cents);
+            commands::run::cmd_run(
+                store.as_ref(),
+                &graph,
+                dry_run,
+                &input_value,
+                &policy,
+                budget_cents,
+            );
         }
         Commands::Trace { composition_id } => {
             let trace_store = init_trace_store();
@@ -382,9 +424,9 @@ fn main() {
             name,
             description,
         } => {
-            let store = init_store();
+            let store = build_store(registry);
             commands::build::cmd_build(
-                &store,
+                store.as_ref(),
                 commands::build::BuildOptions {
                     graph_path: &graph,
                     output_path: &output,
@@ -402,14 +444,13 @@ fn main() {
             allow_capabilities,
             budget_cents,
         } => {
-            let mut store = init_store();
-            let mut index = build_index(&store);
+            let mut store = build_store(registry);
+            let mut index = build_index(store.as_ref());
             let (llm, llm_name) = providers::build_llm_provider();
             if llm_name != "mock" {
                 eprintln!("LLM provider: {llm_name}");
             }
 
-            // Resolve model: CLI flag → VERTEX_AI_MODEL env → default for this provider
             let resolved_model = model
                 .or_else(|| std::env::var("VERTEX_AI_MODEL").ok())
                 .unwrap_or_else(|| noether_engine::llm::LlmConfig::default().model);
@@ -423,7 +464,7 @@ fn main() {
             let policy = parse_capability_policy(allow_capabilities.as_deref());
 
             commands::compose::cmd_compose(
-                &mut store,
+                store.as_mut(),
                 &mut index,
                 llm.as_ref(),
                 &problem,

@@ -1,0 +1,54 @@
+{
+  "description": "Fetch current weather for a city using the wttr.in API and format a one-line report",
+  "version": "0.1.0",
+  "root": {
+    "op": "Sequential",
+    "stages": [
+      {
+        "op": "Stage",
+        "id": "b4dfc6b0",
+        "_comment": "text_template — builds the API URL from input.city"
+      },
+      {
+        "op": "Stage",
+        "id": "39731ebb",
+        "_comment": "http_get — fetches https://wttr.in/{city}?format=j1"
+      },
+      {
+        "op": "Stage",
+        "id": "62bdb044",
+        "_comment": "http_body — extracts the response body text"
+      },
+      {
+        "op": "Stage",
+        "id": "b89d34eb",
+        "_comment": "parse_json — parses the wttr.in JSON response"
+      },
+      {
+        "op": "Parallel",
+        "branches": {
+          "temp_c": {
+            "op": "Stage",
+            "id": "c7d35f7c",
+            "_comment": "json_path — extracts $.current_condition[0].temp_C"
+          },
+          "weather_desc": {
+            "op": "Stage",
+            "id": "c7d35f7c",
+            "_comment": "json_path — extracts $.current_condition[0].weatherDesc[0].value"
+          },
+          "humidity": {
+            "op": "Stage",
+            "id": "c7d35f7c",
+            "_comment": "json_path — extracts $.current_condition[0].humidity"
+          }
+        }
+      },
+      {
+        "op": "Stage",
+        "id": "b4dfc6b0",
+        "_comment": "text_template — formats the final report string"
+      }
+    ]
+  }
+}
