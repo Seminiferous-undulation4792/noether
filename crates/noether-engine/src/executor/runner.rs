@@ -13,6 +13,10 @@ use std::time::Instant;
 pub struct CompositionResult {
     pub output: Value,
     pub trace: CompositionTrace,
+    /// Actual cost consumed during this run in cents (sum of declared
+    /// `Effect::Cost` for every stage that executed). Zero when no budget
+    /// tracking was requested.
+    pub spent_cents: u64,
 }
 
 /// Execute a composition graph using the provided executor.
@@ -78,7 +82,11 @@ pub fn run_composition_with_cache<E: StageExecutor + Sync>(
         warnings: Vec::new(),
     };
 
-    Ok(CompositionResult { output, trace })
+    Ok(CompositionResult {
+        output,
+        trace,
+        spent_cents: 0,
+    })
 }
 
 fn execute_node<E: StageExecutor + Sync>(

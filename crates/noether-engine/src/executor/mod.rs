@@ -7,6 +7,7 @@ pub mod nix;
 pub mod runtime;
 
 // Always-available executor implementations.
+pub mod budget;
 pub mod inline;
 pub mod mock;
 pub mod pure_cache;
@@ -26,6 +27,8 @@ pub enum ExecutionError {
         stage_id: StageId,
         timeout_secs: u64,
     },
+    #[error("cost budget exceeded: spent {spent_cents}¢ of {budget_cents}¢ limit")]
+    BudgetExceeded { spent_cents: u64, budget_cents: u64 },
     #[error("retry exhausted after {attempts} attempts for stage {stage_id:?}")]
     RetryExhausted { stage_id: StageId, attempts: u32 },
     #[error("remote call to {url} failed: {reason}")]

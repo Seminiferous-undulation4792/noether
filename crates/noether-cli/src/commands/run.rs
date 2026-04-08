@@ -3,6 +3,7 @@ use noether_engine::checker::{
     check_capabilities, check_effects, check_graph, collect_effect_warnings, infer_effects,
     verify_signatures, CapabilityPolicy, EffectPolicy,
 };
+use noether_engine::executor::budget::{build_cost_map, BudgetedExecutor};
 use noether_engine::executor::runner::run_composition;
 use noether_engine::lagrange::{compute_composition_id, parse_graph};
 use noether_engine::planner::plan_graph;
@@ -138,45 +139,79 @@ pub fn cmd_run(
     let warning_strings: Vec<String> = effect_warnings.iter().map(|w| format!("{w}")).collect();
 
     if dry_run {
-        println!(
-            "{}",
-            acli_ok(json!({
-                "mode": "dry-run",
-                "composition_id": composition_id,
-                "description": graph.description,
-                "type_check": {
-                    "input": format!("{}", check.resolved.input),
-                    "output": format!("{}", check.resolved.output),
-                },
-                "effects": inferred_kinds,
-                "plan": {
-                    "steps": plan.steps.len(),
-                    "parallel_groups": plan.parallel_groups.len(),
-                    "cost": plan.cost,
-                },
-                "warnings": warning_strings,
-            }))
-        );
+        let expected_cost: u64 = if policies.budget_cents.is_some() {
+            let cost_map = build_cost_map(&graph.root, store);
+            cost_map.values().sum()
+        } else {
+            0
+        };
+
+        let mut resp = json!({
+            "mode": "dry-run",
+            "composition_id": composition_id,
+            "description": graph.description,
+            "type_check": {
+                "input": format!("{}", check.resolved.input),
+                "output": format!("{}", check.resolved.output),
+            },
+            "effects": inferred_kinds,
+            "plan": {
+                "steps": plan.steps.len(),
+                "parallel_groups": plan.parallel_groups.len(),
+                "cost": plan.cost,
+            },
+            "warnings": warning_strings,
+        });
+        if expected_cost > 0 {
+            resp["expected_cost_cents"] = json!(expected_cost);
+        }
+        println!("{}", acli_ok(resp));
         return;
     }
 
-    // 9. Execute — use CompositeExecutor so synthesized stages run via Nix.
+    // 9. Execute — wrap with BudgetedExecutor when a budget is set so cost
+    //    is tracked and enforced at runtime (not just statically pre-flight).
     let executor = super::executor_builder::build_executor(store);
-    match run_composition(&graph.root, input, &executor, &composition_id) {
+    let result = if let Some(budget) = policies.budget_cents {
+        let cost_map = build_cost_map(&graph.root, store);
+        let budgeted = BudgetedExecutor::new(executor, cost_map, budget);
+        let r = run_composition(&graph.root, input, &budgeted, &composition_id);
+        r.map(|mut cr| {
+            cr.spent_cents = budgeted.spent_cents();
+            cr
+        })
+    } else {
+        run_composition(&graph.root, input, &executor, &composition_id)
+    };
+
+    match result {
         Ok(result) => {
             // Persist the trace so `noether trace <id>` can retrieve it later.
             trace_store.put(result.trace.clone());
 
-            println!(
+            let mut resp = json!({
+                "composition_id": composition_id,
+                "output": result.output,
+                "effects": inferred_kinds,
+                "trace": result.trace,
+                "warnings": warning_strings,
+            });
+            if result.spent_cents > 0 {
+                resp["spent_cents"] = json!(result.spent_cents);
+            }
+            println!("{}", acli_ok(resp));
+        }
+        Err(noether_engine::executor::ExecutionError::BudgetExceeded {
+            spent_cents,
+            budget_cents,
+        }) => {
+            eprintln!(
                 "{}",
-                acli_ok(json!({
-                    "composition_id": composition_id,
-                    "output": result.output,
-                    "effects": inferred_kinds,
-                    "trace": result.trace,
-                    "warnings": warning_strings,
-                }))
+                acli_error(&format!(
+                    "cost budget exceeded at runtime: spent {spent_cents}¢ of {budget_cents}¢"
+                ))
             );
+            std::process::exit(2);
         }
         Err(e) => {
             eprintln!("{}", acli_error(&format!("execution failed: {e}")));
