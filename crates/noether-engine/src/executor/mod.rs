@@ -21,6 +21,11 @@ pub enum ExecutionError {
     StageNotFound(StageId),
     #[error("stage {stage_id:?} failed: {message}")]
     StageFailed { stage_id: StageId, message: String },
+    #[error("stage {stage_id:?} timed out after {timeout_secs}s")]
+    TimedOut {
+        stage_id: StageId,
+        timeout_secs: u64,
+    },
     #[error("retry exhausted after {attempts} attempts for stage {stage_id:?}")]
     RetryExhausted { stage_id: StageId, attempts: u32 },
     #[error("remote call to {url} failed: {reason}")]
