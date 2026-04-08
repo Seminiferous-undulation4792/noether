@@ -20,10 +20,7 @@ fn parse_spec(content: &str) -> Result<Stage, String> {
 
     // Simple spec format: has "name" + "implementation" but no "id".
     if v.get("name").is_some() && v.get("implementation").is_some() && v.get("id").is_none() {
-        let name = v["name"]
-            .as_str()
-            .ok_or("missing 'name'")?
-            .to_string();
+        let name = v["name"].as_str().ok_or("missing 'name'")?.to_string();
         let description = v
             .get("description")
             .and_then(|d| d.as_str())
@@ -37,7 +34,11 @@ fn parse_spec(content: &str) -> Result<Stage, String> {
         let effects_raw: Vec<String> = v
             .get("effects")
             .and_then(|e| e.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let effects: Vec<Effect> = effects_raw
@@ -70,7 +71,9 @@ fn parse_spec(content: &str) -> Result<Stage, String> {
                 .ok_or("missing implementation.code")?
         };
         let language = if v["implementation"].is_string() {
-            v.get("language").and_then(|l| l.as_str()).unwrap_or("python")
+            v.get("language")
+                .and_then(|l| l.as_str())
+                .unwrap_or("python")
         } else {
             v["implementation"]["language"]
                 .as_str()
@@ -115,7 +118,12 @@ fn parse_spec(content: &str) -> Result<Stage, String> {
     serde_json::from_str::<Stage>(content).map_err(|e| format!("invalid stage JSON: {e}"))
 }
 
-pub fn cmd_add(store: &mut dyn StageStore, spec_path: &str, author_key: &SigningKey, index: &SemanticIndex) {
+pub fn cmd_add(
+    store: &mut dyn StageStore,
+    spec_path: &str,
+    author_key: &SigningKey,
+    index: &SemanticIndex,
+) {
     let content = match fs::read_to_string(spec_path) {
         Ok(c) => c,
         Err(e) => {
@@ -246,10 +254,7 @@ pub fn cmd_get(store: &dyn StageStore, hash: &str) {
             let hint = find_prefix_hint(store, hash);
             eprintln!(
                 "{}",
-                acli_error_hint(
-                    &format!("stage {hash} not found"),
-                    hint.as_deref(),
-                )
+                acli_error_hint(&format!("stage {hash} not found"), hint.as_deref(),)
             );
             std::process::exit(1);
         }
@@ -278,7 +283,10 @@ fn find_prefix_hint(store: &dyn StageStore, prefix: &str) -> Option<String> {
                 .into(),
         )
     } else {
-        let ids: Vec<_> = matches.iter().map(|s| &s.id.0[..16.min(s.id.0.len())]).collect();
+        let ids: Vec<_> = matches
+            .iter()
+            .map(|s| &s.id.0[..16.min(s.id.0.len())])
+            .collect();
         Some(format!("Did you mean one of: {}?", ids.join(", ")))
     }
 }

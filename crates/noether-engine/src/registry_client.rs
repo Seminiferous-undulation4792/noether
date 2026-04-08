@@ -41,9 +41,13 @@ fn extract_result(resp: reqwest::blocking::Response) -> Result<Value, StoreError
     let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
 
     if status == 404 || code == "NOT_FOUND" {
-        Err(StoreError::IoError { message: format!("NOT_FOUND: {msg}") })
+        Err(StoreError::IoError {
+            message: format!("NOT_FOUND: {msg}"),
+        })
     } else {
-        Err(StoreError::IoError { message: format!("{code}: {msg}") })
+        Err(StoreError::IoError {
+            message: format!("{code}: {msg}"),
+        })
     }
 }
 
@@ -70,7 +74,9 @@ impl RemoteStageStore {
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(concat!("noether-cli/", env!("CARGO_PKG_VERSION")))
             .build()
-            .map_err(|e| StoreError::IoError { message: e.to_string() })?;
+            .map_err(|e| StoreError::IoError {
+                message: e.to_string(),
+            })?;
 
         let mut store = Self {
             client,
@@ -134,10 +140,7 @@ impl RemoteStageStore {
         self.with_auth(self.client.patch(format!("{}{path}", self.base_url)))
     }
 
-    fn with_auth(
-        &self,
-        b: reqwest::blocking::RequestBuilder,
-    ) -> reqwest::blocking::RequestBuilder {
+    fn with_auth(&self, b: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
         match &self.api_key {
             Some(k) => b.header("X-API-Key", k),
             None => b,
@@ -149,11 +152,13 @@ impl RemoteStageStore {
 
 impl StageStore for RemoteStageStore {
     fn put(&mut self, stage: Stage) -> Result<StageId, StoreError> {
-        let resp = self
-            .post_req("/stages")
-            .json(&stage)
-            .send()
-            .map_err(|e| StoreError::IoError { message: e.to_string() })?;
+        let resp =
+            self.post_req("/stages")
+                .json(&stage)
+                .send()
+                .map_err(|e| StoreError::IoError {
+                    message: e.to_string(),
+                })?;
 
         let result = match extract_result(resp) {
             Ok(r) => r,
@@ -230,7 +235,9 @@ impl StageStore for RemoteStageStore {
             .patch_req(&format!("/stages/{}/lifecycle", id.0))
             .json(&body)
             .send()
-            .map_err(|e| StoreError::IoError { message: e.to_string() })?;
+            .map_err(|e| StoreError::IoError {
+                message: e.to_string(),
+            })?;
 
         extract_result(resp)?;
 
@@ -260,7 +267,11 @@ impl StageStore for RemoteStageStore {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    return StoreStats { total, by_lifecycle, by_effect };
+                    return StoreStats {
+                        total,
+                        by_lifecycle,
+                        by_effect,
+                    };
                 }
             }
         }

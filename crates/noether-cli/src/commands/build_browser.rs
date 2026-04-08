@@ -66,19 +66,14 @@ pub fn cmd_build_browser(store: &dyn StageStore, opts: BuildOptions<'_>) {
             let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
             eprintln!(
                 "{}",
-                acli_error_hints(
-                    &format!("{} type error(s)", msgs.len()),
-                    None,
-                    Some(msgs),
-                )
+                acli_error_hints(&format!("{} type error(s)", msgs.len()), None, Some(msgs),)
             );
             std::process::exit(2);
         }
     }
 
     // ── 3. Signature pre-flight ───────────────────────────────────────────────
-    let stdlib_ids_for_sig: HashSet<StageId> =
-        load_stdlib().into_iter().map(|s| s.id).collect();
+    let stdlib_ids_for_sig: HashSet<StageId> = load_stdlib().into_iter().map(|s| s.id).collect();
     let sig_violations: Vec<_> = verify_signatures(&graph.root, store)
         .into_iter()
         .filter(|v| !stdlib_ids_for_sig.contains(&v.stage_id))
@@ -168,7 +163,10 @@ pub fn cmd_build_browser(store: &dyn StageStore, opts: BuildOptions<'_>) {
     let src_dir = build_dir.join("src");
 
     if let Err(e) = std::fs::create_dir_all(&src_dir) {
-        eprintln!("{}", acli_error(&format!("Failed to create build dir: {e}")));
+        eprintln!(
+            "{}",
+            acli_error(&format!("Failed to create build dir: {e}"))
+        );
         std::process::exit(1);
     }
 
@@ -189,12 +187,21 @@ pub fn cmd_build_browser(store: &dyn StageStore, opts: BuildOptions<'_>) {
     );
     write_file(
         &build_dir.join("Cargo.toml"),
-        &generate_wasm_cargo_toml("noether-browser-stage", app_version, &core_path, &store_path, &engine_path),
+        &generate_wasm_cargo_toml(
+            "noether-browser-stage",
+            app_version,
+            &core_path,
+            &store_path,
+            &engine_path,
+        ),
     );
     write_file(&src_dir.join("lib.rs"), &generate_wasm_lib_rs(&bundle));
 
     // ── 8. wasm-pack build ────────────────────────────────────────────────────
-    eprintln!("Building {} (browser target, may take a minute on first run)…", app_name);
+    eprintln!(
+        "Building {} (browser target, may take a minute on first run)…",
+        app_name
+    );
 
     let wasm_pack = which_wasm_pack();
     let wasm_status = Command::new(&wasm_pack)
@@ -215,7 +222,10 @@ pub fn cmd_build_browser(store: &dyn StageStore, opts: BuildOptions<'_>) {
             std::process::exit(1);
         }
         Ok(s) if !s.success() => {
-            eprintln!("{}", acli_error("wasm-pack build failed — see compiler output above"));
+            eprintln!(
+                "{}",
+                acli_error("wasm-pack build failed — see compiler output above")
+            );
             eprintln!("Build directory preserved: {}", build_dir.display());
             std::process::exit(1);
         }
@@ -226,7 +236,10 @@ pub fn cmd_build_browser(store: &dyn StageStore, opts: BuildOptions<'_>) {
     if let Err(e) = std::fs::create_dir_all(output_path) {
         eprintln!(
             "{}",
-            acli_error(&format!("Failed to create output dir '{}': {e}", output_path.display()))
+            acli_error(&format!(
+                "Failed to create output dir '{}': {e}",
+                output_path.display()
+            ))
         );
         std::process::exit(1);
     }
@@ -236,7 +249,10 @@ pub fn cmd_build_browser(store: &dyn StageStore, opts: BuildOptions<'_>) {
     let mut js_filename = String::from("noether.js");
 
     for entry in std::fs::read_dir(&pkg_dir).unwrap_or_else(|_| {
-        eprintln!("{}", acli_error("wasm-pack did not produce a pkg/ directory"));
+        eprintln!(
+            "{}",
+            acli_error("wasm-pack did not produce a pkg/ directory")
+        );
         std::process::exit(1);
     }) {
         let entry = match entry {

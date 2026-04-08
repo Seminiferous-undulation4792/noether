@@ -39,7 +39,10 @@ impl MistralNativeProvider {
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
             .expect("failed to build reqwest client");
-        Self { api_key: api_key.into(), client }
+        Self {
+            api_key: api_key.into(),
+            client,
+        }
     }
 
     /// Construct from environment. Returns `Err` if `MISTRAL_API_KEY` is not set.
@@ -98,7 +101,9 @@ impl LlmProvider for MistralNativeProvider {
         let text = resp.text().map_err(|e| LlmError::Http(e.to_string()))?;
 
         if !status.is_success() {
-            return Err(LlmError::Provider(format!("Mistral API HTTP {status}: {text}")));
+            return Err(LlmError::Provider(format!(
+                "Mistral API HTTP {status}: {text}"
+            )));
         }
 
         let json: Value =
@@ -155,7 +160,9 @@ impl EmbeddingProvider for MistralNativeEmbeddingProvider {
     fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError> {
         // Delegate to batch — avoids duplicating the HTTP/parse logic.
         let mut batch = self.embed_batch(&[text])?;
-        batch.pop().ok_or_else(|| EmbeddingError::Provider("empty response".into()))
+        batch
+            .pop()
+            .ok_or_else(|| EmbeddingError::Provider("empty response".into()))
     }
 
     /// Override the default batch implementation to call the API once for all texts.
@@ -180,7 +187,9 @@ impl EmbeddingProvider for MistralNativeEmbeddingProvider {
             .map_err(|e| EmbeddingError::Provider(e.to_string()))?;
 
         let status = resp.status();
-        let text = resp.text().map_err(|e| EmbeddingError::Provider(e.to_string()))?;
+        let text = resp
+            .text()
+            .map_err(|e| EmbeddingError::Provider(e.to_string()))?;
 
         if !status.is_success() {
             return Err(EmbeddingError::Provider(format!(
@@ -188,8 +197,8 @@ impl EmbeddingProvider for MistralNativeEmbeddingProvider {
             )));
         }
 
-        let json: Value = serde_json::from_str(&text)
-            .map_err(|e| EmbeddingError::Provider(e.to_string()))?;
+        let json: Value =
+            serde_json::from_str(&text).map_err(|e| EmbeddingError::Provider(e.to_string()))?;
 
         // Response: { "data": [{ "embedding": [...], "index": 0 }, ...] }
         // Sort by index to preserve input order.

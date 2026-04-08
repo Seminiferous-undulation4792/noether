@@ -161,8 +161,8 @@ pub fn records_to_arrow(input: &Value) -> Result<Value, ExecutionError> {
         .map_err(|e| fail(format!("base64 decode error: {e}")))?;
 
     let cursor = Cursor::new(bytes);
-    let mut reader =
-        StreamReader::try_new(cursor, None).map_err(|e| fail(format!("arrow reader error: {e}")))?;
+    let mut reader = StreamReader::try_new(cursor, None)
+        .map_err(|e| fail(format!("arrow reader error: {e}")))?;
 
     let mut rows: Vec<Value> = vec![];
 

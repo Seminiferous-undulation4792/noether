@@ -80,8 +80,7 @@ impl CompositionCache {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(&self.entries)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(&self.entries).map_err(std::io::Error::other)?;
         std::fs::write(&self.path, json)
     }
 }

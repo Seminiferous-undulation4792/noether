@@ -114,10 +114,7 @@ pub fn retry_hof<E: StageExecutor>(executor: &E, input: &Value) -> Result<Value,
     let inner_input = input
         .get("input")
         .ok_or_else(|| fail("retry", "missing field 'input'"))?;
-    let max_attempts = input["max_attempts"]
-        .as_u64()
-        .unwrap_or(1)
-        .max(1) as usize;
+    let max_attempts = input["max_attempts"].as_u64().unwrap_or(1).max(1) as usize;
     let delay_ms = input["delay_ms"].as_u64().unwrap_or(0);
 
     let sid = StageId(stage_id.into());
@@ -146,10 +143,7 @@ pub fn retry_hof<E: StageExecutor>(executor: &E, input: &Value) -> Result<Value,
 /// Measures wall-clock time on the calling thread. This is correct for synchronous
 /// executors. The check fires *after* the stage returns — it does not interrupt
 /// a running stage.
-pub fn timeout_hof<E: StageExecutor>(
-    executor: &E,
-    input: &Value,
-) -> Result<Value, ExecutionError> {
+pub fn timeout_hof<E: StageExecutor>(executor: &E, input: &Value) -> Result<Value, ExecutionError> {
     let stage_id = input["stage_id"]
         .as_str()
         .ok_or_else(|| fail("timeout", "missing string field 'stage_id'"))?;
@@ -217,8 +211,8 @@ pub fn race_hof<E: StageExecutor>(executor: &E, input: &Value) -> Result<Value, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::executor::{ExecutionError, StageExecutor};
     use crate::executor::mock::MockExecutor;
+    use crate::executor::{ExecutionError, StageExecutor};
     use noether_core::stage::StageId;
     use serde_json::json;
 
@@ -261,10 +255,7 @@ mod tests {
     #[test]
     fn race_returns_first_success() {
         let exec = ok_executor();
-        let result = race_hof(
-            &exec,
-            &json!({"stages": ["a", "b"], "input": "x"}),
-        );
+        let result = race_hof(&exec, &json!({"stages": ["a", "b"], "input": "x"}));
         assert!(result.is_ok());
     }
 

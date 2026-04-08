@@ -96,7 +96,7 @@ fn collect_ids_recursive<'a>(node: &'a CompositionNode, ids: &mut Vec<&'a StageI
     match node {
         CompositionNode::Stage { id } => ids.push(id),
         CompositionNode::RemoteStage { .. } => {} // no local stage ID; URL is resolved at runtime
-        CompositionNode::Const { .. } => {} // no stage IDs in a constant
+        CompositionNode::Const { .. } => {}       // no stage IDs in a constant
         CompositionNode::Sequential { stages } => {
             for s in stages {
                 collect_ids_recursive(s, ids);

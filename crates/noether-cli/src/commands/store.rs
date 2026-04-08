@@ -1,6 +1,6 @@
 use crate::output::{acli_error, acli_ok};
 use noether_core::effects::{Effect, EffectSet};
-use noether_core::stage::{StageLifecycle, verify_stage_signature};
+use noether_core::stage::{verify_stage_signature, StageLifecycle};
 use noether_engine::index::SemanticIndex;
 use noether_engine::llm::{LlmConfig, LlmProvider, Message};
 use noether_store::StageStore;
@@ -52,8 +52,18 @@ pub fn cmd_retro(
     let pair_details: Vec<serde_json::Value> = pairs
         .iter()
         .map(|(a, b, sim)| {
-            let desc_a = store.get(a).ok().flatten().map(|s| s.description.clone()).unwrap_or_default();
-            let desc_b = store.get(b).ok().flatten().map(|s| s.description.clone()).unwrap_or_default();
+            let desc_a = store
+                .get(a)
+                .ok()
+                .flatten()
+                .map(|s| s.description.clone())
+                .unwrap_or_default();
+            let desc_b = store
+                .get(b)
+                .ok()
+                .flatten()
+                .map(|s| s.description.clone())
+                .unwrap_or_default();
             json!({
                 "stage_a": { "id": a.0, "description": desc_a },
                 "stage_b": { "id": b.0, "description": desc_b },
@@ -87,11 +97,7 @@ pub fn cmd_retro(
     let mut errors: Vec<String> = Vec::new();
 
     for (a, b, _sim) in &pairs {
-        let lifecycle_b = store
-            .get(b)
-            .ok()
-            .flatten()
-            .map(|s| s.lifecycle.clone());
+        let lifecycle_b = store.get(b).ok().flatten().map(|s| s.lifecycle.clone());
 
         match lifecycle_b {
             Some(noether_core::stage::StageLifecycle::Active) => {
@@ -206,7 +212,10 @@ pub fn cmd_migrate_effects(store: &mut dyn StageStore, llm: &dyn LlmProvider, dr
 
                 // Insert the updated stage.
                 if let Err(e) = store.put(new_stage) {
-                    eprintln!("Warning: failed to insert migrated stage for {}: {e}", stage.id.0);
+                    eprintln!(
+                        "Warning: failed to insert migrated stage for {}: {e}",
+                        stage.id.0
+                    );
                     continue;
                 }
 
@@ -251,11 +260,7 @@ pub fn cmd_migrate_effects(store: &mut dyn StageStore, llm: &dyn LlmProvider, dr
 /// Ask the LLM to classify effects from a stage description and code snippet.
 /// Falls back to `Unknown` (empty) on any error.
 fn infer_effects_with_llm(llm: &dyn LlmProvider, description: &str, code: &str) -> EffectSet {
-    let code_snippet = if code.len() > 800 {
-        &code[..800]
-    } else {
-        code
-    };
+    let code_snippet = if code.len() > 800 { &code[..800] } else { code };
 
     let prompt = format!(
         r#"You are classifying the side-effects of a Noether stage.
@@ -396,14 +401,26 @@ pub fn cmd_dedup(store: &mut dyn StageStore, index: &SemanticIndex, threshold: f
             stage_a.as_ref().map(|s| s.examples.len()).unwrap_or(0),
             stage_b.as_ref().map(|s| s.examples.len()).unwrap_or(0),
         );
-        let remove_id = if ex_a >= ex_b && (ex_a != ex_b || a.0 <= b.0) { b } else { a };
+        let remove_id = if ex_a >= ex_b && (ex_a != ex_b || a.0 <= b.0) {
+            b
+        } else {
+            a
+        };
 
-        let lifecycle = store.get(remove_id).ok().flatten().map(|s| s.lifecycle.clone());
+        let lifecycle = store
+            .get(remove_id)
+            .ok()
+            .flatten()
+            .map(|s| s.lifecycle.clone());
         match lifecycle {
             Some(noether_core::stage::StageLifecycle::Active) => {
-                match store.update_lifecycle(remove_id, noether_core::stage::StageLifecycle::Tombstone) {
+                match store
+                    .update_lifecycle(remove_id, noether_core::stage::StageLifecycle::Tombstone)
+                {
                     Ok(_) => tombstoned += 1,
-                    Err(e) => errors.push(format!("could not tombstone {}: {e}", &remove_id.0[..8])),
+                    Err(e) => {
+                        errors.push(format!("could not tombstone {}: {e}", &remove_id.0[..8]))
+                    }
                 }
             }
             _ => skipped += 1,
@@ -464,7 +481,9 @@ pub fn cmd_health(store: &dyn StageStore) {
                 }
 
                 // 2. Invalid signatures
-                if let (Some(sig), Some(pub_key)) = (&stage.ed25519_signature, &stage.signer_public_key) {
+                if let (Some(sig), Some(pub_key)) =
+                    (&stage.ed25519_signature, &stage.signer_public_key)
+                {
                     match verify_stage_signature(&stage.id, sig, pub_key) {
                         Ok(false) => {
                             invalid_sig.push(json!({
@@ -506,7 +525,8 @@ pub fn cmd_health(store: &dyn StageStore) {
             }
             StageLifecycle::Deprecated { successor_id } => {
                 // 5. Deprecated pointing to a non-existent or tombstoned successor
-                let successor_ok = store.get(successor_id)
+                let successor_ok = store
+                    .get(successor_id)
                     .ok()
                     .flatten()
                     .map(|s| !matches!(s.lifecycle, StageLifecycle::Tombstone))

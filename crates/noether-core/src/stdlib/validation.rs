@@ -12,7 +12,10 @@ use serde_json::json;
 /// Check output type shared by the four parallel checks.
 /// `{ passed: Bool, error?: Text|Null, warning?: Text|Null, ... }`
 fn check_out() -> NType {
-    NType::Map { key: Box::new(NType::Text), value: Box::new(NType::Any) }
+    NType::Map {
+        key: Box::new(NType::Text),
+        value: Box::new(NType::Any),
+    }
 }
 
 /// ValidationReport type: `{ passed: Bool, errors: [Text], warnings: [Text] }`

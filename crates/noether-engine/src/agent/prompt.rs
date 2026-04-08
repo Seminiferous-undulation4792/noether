@@ -57,11 +57,14 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
 
     // --- Type system primer ---
     prompt.push_str("## Type System\n\n");
-    prompt.push_str("- `Any` accepts any value. `Text`, `Number`, `Bool`, `Null` are primitives.\n");
+    prompt
+        .push_str("- `Any` accepts any value. `Text`, `Number`, `Bool`, `Null` are primitives.\n");
     prompt.push_str("- `Record { field: Type }` is an object with named fields. The stage REQUIRES exactly those fields.\n");
     prompt.push_str("- `List<T>` is an array. `Map<K,V>` is a key-value object.\n");
     prompt.push_str("- `T | Null` means the field is optional (can be null).\n");
-    prompt.push_str("- Width subtyping: `{a, b, c}` is subtype of `{a, b}` — extra fields are OK.\n\n");
+    prompt.push_str(
+        "- Width subtyping: `{a, b, c}` is subtype of `{a, b}` — extra fields are OK.\n\n",
+    );
 
     // --- Operators ---
     prompt.push_str("## Operators\n\n");
@@ -78,7 +81,8 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("Many stages require `Record { field1: T1, field2: T2, ... }` as input.\n");
     prompt.push_str("**The canonical pattern: `Parallel` + `Const`** assembles a Record from live stage outputs and literal values.\n\n");
     prompt.push_str("How Parallel works:\n");
-    prompt.push_str("- Each branch receives the FULL pipeline input (not null, not a sub-field).\n");
+    prompt
+        .push_str("- Each branch receives the FULL pipeline input (not null, not a sub-field).\n");
     prompt.push_str("- `Const` branches ignore the input and emit the literal value.\n");
     prompt.push_str("- `Stage` branches receive the full input and emit their output.\n");
     prompt.push_str("- The merged output is `{\"branch_name\": <branch_output>, ...}`.\n\n");
@@ -89,12 +93,16 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("  \"branches\": {\n");
     prompt.push_str("    \"results\": {\"op\": \"Stage\", \"id\": \"<search_stage_id>\"},\n");
     prompt.push_str("    \"topic\":   {\"op\": \"Const\", \"value\": \"async runtime\"},\n");
-    prompt.push_str("    \"summary\": {\"op\": \"Const\", \"value\": \"Top results for async runtime\"}\n");
+    prompt.push_str(
+        "    \"summary\": {\"op\": \"Const\", \"value\": \"Top results for async runtime\"}\n",
+    );
     prompt.push_str("  }\n");
     prompt.push_str("}\n");
     prompt.push_str("```\n");
     prompt.push_str("This produces `{results: [...], topic: \"async runtime\", summary: \"...\"}` — exactly what the next stage needs.\n\n");
-    prompt.push_str("**COMMON MISTAKE**: Feeding a bare `Bool` or `Number` to a stage that expects a Record.\n");
+    prompt.push_str(
+        "**COMMON MISTAKE**: Feeding a bare `Bool` or `Number` to a stage that expects a Record.\n",
+    );
     prompt.push_str("ALWAYS check that your Sequential chain's types match at each step.\n\n");
 
     // --- Branch operator guidance ---
@@ -104,7 +112,9 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("2. If true:  runs if_true(X)  — same X, NOT the Bool\n");
     prompt.push_str("3. If false: runs if_false(X) — same X, NOT the Bool\n```\n\n");
     prompt.push_str("Do NOT use Branch when you mean a stage that selects between values.\n");
-    prompt.push_str("Branch is for routing execution to different sub-graphs based on a condition.\n\n");
+    prompt.push_str(
+        "Branch is for routing execution to different sub-graphs based on a condition.\n\n",
+    );
 
     // --- Synthesis option ---
     prompt.push_str("## When to Synthesize a New Stage\n\n");
@@ -112,18 +122,28 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("- The required primitive operation (e.g. modulo, even/odd, filter, sort-by-key) has no matching stage.\n");
     prompt.push_str("- Solving the problem would need 3+ stages of awkward Record manipulation.\n");
     prompt.push_str("- You need to filter a list, transform each element with custom logic, or reshape data in a bespoke way.\n");
-    prompt.push_str("- **You need to call a SPECIFIC external HTTP API** — always synthesize for API calls.\n");
+    prompt.push_str(
+        "- **You need to call a SPECIFIC external HTTP API** — always synthesize for API calls.\n",
+    );
     prompt.push_str("  The `http_get` stdlib stage is for generic URL fetching; it cannot parse JSON, extract fields,\n");
     prompt.push_str("  or format results specific to a given API. Always synthesize a stage that does the full\n");
     prompt.push_str("  HTTP call + parse + reshape in one Python function.\n\n");
     prompt.push_str("**CRITICAL: A synthesis request is a STANDALONE top-level document.**\n");
-    prompt.push_str("It CANNOT be embedded inside a `Sequential.stages` list or any other graph node.\n");
+    prompt.push_str(
+        "It CANNOT be embedded inside a `Sequential.stages` list or any other graph node.\n",
+    );
     prompt.push_str("You MUST choose ONE of these two responses per turn:\n");
     prompt.push_str("  Option A) A synthesis request (to register a missing stage), OR\n");
-    prompt.push_str("  Option B) A composition graph (using existing + already-registered stages).\n");
-    prompt.push_str("If you return a synthesis request, the stage will be registered and you WILL get\n");
-    prompt.push_str("another turn to compose using that stage. Do NOT mix them in one response.\n\n");
-    prompt.push_str("**Synthesis format (respond with ONLY this — no graph, no explanation):**\n\n");
+    prompt.push_str(
+        "  Option B) A composition graph (using existing + already-registered stages).\n",
+    );
+    prompt.push_str(
+        "If you return a synthesis request, the stage will be registered and you WILL get\n",
+    );
+    prompt
+        .push_str("another turn to compose using that stage. Do NOT mix them in one response.\n\n");
+    prompt
+        .push_str("**Synthesis format (respond with ONLY this — no graph, no explanation):**\n\n");
     prompt.push_str("```json\n");
     prompt.push_str("{\n");
     prompt.push_str("  \"action\": \"synthesize\",\n");
@@ -139,7 +159,9 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("NType JSON format: `{\"kind\":\"Text\"}`, `{\"kind\":\"Number\"}`, `{\"kind\":\"Bool\"}`, `{\"kind\":\"Any\"}`, `{\"kind\":\"Null\"}`, ");
     prompt.push_str("`{\"kind\":\"List\",\"value\":<T>}`, `{\"kind\":\"Record\",\"value\":{\"field\":<T>,...}}`, `{\"kind\":\"Union\",\"value\":[<T>,...]}` \n\n");
     prompt.push_str("**Examples that SHOULD use synthesis:**\n");
-    prompt.push_str("- \"check if a number is even or odd\" → synthesize `is_even_or_odd` (Number → Text)\n");
+    prompt.push_str(
+        "- \"check if a number is even or odd\" → synthesize `is_even_or_odd` (Number → Text)\n",
+    );
     prompt.push_str("- \"filter a list keeping items that match a pattern\" → synthesize `filter_by_pattern` (Record { items, pattern } → List)\n");
     prompt.push_str("- \"sort a list by a field\" → synthesize `sort_by_field` (Record { items, field } → List)\n");
     prompt.push_str("- \"search npm packages and return results\" → synthesize `npm_search` (Record { query, limit } → List) — NEVER try to compose with http_get\n");
@@ -180,7 +202,9 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
 
     prompt.push_str("## EXAMPLE 2: Branch operator (condition-based routing)\n\n");
     prompt.push_str("Problem: \"Convert text to uppercase if it is not null, otherwise return empty string\"\n\n");
-    prompt.push_str("The `Branch` predicate receives the original `Text | Null` input and returns `Bool`.\n");
+    prompt.push_str(
+        "The `Branch` predicate receives the original `Text | Null` input and returns `Bool`.\n",
+    );
     prompt.push_str("`if_true` and `if_false` ALSO receive the original input — NOT the Bool.\n\n");
     prompt.push_str("```json\n");
     prompt.push_str("{\n");
@@ -205,7 +229,9 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("```\n\n");
 
     prompt.push_str("## EXAMPLE 3: Const + Parallel to assemble a multi-field Record\n\n");
-    prompt.push_str("Problem: \"Search for repos, then format a report with a fixed topic and summary\"\n\n");
+    prompt.push_str(
+        "Problem: \"Search for repos, then format a report with a fixed topic and summary\"\n\n",
+    );
     prompt.push_str("The search stage returns a List. The format stage needs `Record{topic, results, summary}`.\n");
     prompt.push_str("Use Parallel: `results` branch runs the search (receives full input), `topic` and `summary` are Const literals.\n\n");
     prompt.push_str("```json\n");
@@ -220,7 +246,9 @@ pub fn build_system_prompt(candidates: &[(&SearchResult, &Stage)]) -> String {
     prompt.push_str("        \"branches\": {\n");
     prompt.push_str("          \"results\": {\"op\": \"Stage\", \"id\": \"<search_stage_id>\"},\n");
     prompt.push_str("          \"topic\":   {\"op\": \"Const\", \"value\": \"async runtime\"},\n");
-    prompt.push_str("          \"summary\": {\"op\": \"Const\", \"value\": \"Top async runtime libraries\"}\n");
+    prompt.push_str(
+        "          \"summary\": {\"op\": \"Const\", \"value\": \"Top async runtime libraries\"}\n",
+    );
     prompt.push_str("        }\n");
     prompt.push_str("      },\n");
     prompt.push_str("      {\"op\": \"Stage\", \"id\": \"<format_stage_id>\"}\n");
@@ -301,7 +329,9 @@ pub fn build_effect_inference_prompt(code: &str, language: &str) -> String {
     p.push_str("List ONLY the effects that apply to this code. If the code has no side effects and is deterministic, return `[\"Pure\"]`.\n\n");
     p.push_str("Rules:\n");
     p.push_str("- Pure and NonDeterministic are mutually exclusive (non-deterministic implies NOT Pure).\n");
-    p.push_str("- If the code imports urllib, requests, httpx, aiohttp, or any HTTP library → Network.\n");
+    p.push_str(
+        "- If the code imports urllib, requests, httpx, aiohttp, or any HTTP library → Network.\n",
+    );
     p.push_str("- If the code has try/except or can raise → Fallible.\n");
     p.push_str("- If you cannot determine the effects → Unknown (not Pure).\n\n");
 
@@ -337,7 +367,9 @@ pub fn extract_effect_response(response: &str) -> noether_core::effects::EffectS
             "Fallible" => Some(Effect::Fallible),
             "Network" => Some(Effect::Network),
             "NonDeterministic" => Some(Effect::NonDeterministic),
-            "Llm" => Some(Effect::Llm { model: "unknown".into() }),
+            "Llm" => Some(Effect::Llm {
+                model: "unknown".into(),
+            }),
             "Unknown" => Some(Effect::Unknown),
             _ => None,
         })
@@ -427,13 +459,19 @@ pub fn build_synthesis_prompt(spec: &SynthesisSpec) -> String {
     p.push_str("   Return a value matching the output type.\n\n");
     p.push_str("## Python Implementation Rules\n\n");
     p.push_str("- **Prefer Python stdlib over third-party packages** when possible.\n");
-    p.push_str("  - For HTTP: use `urllib.request` / `urllib.parse` (always available), NOT `requests`.\n");
+    p.push_str(
+        "  - For HTTP: use `urllib.request` / `urllib.parse` (always available), NOT `requests`.\n",
+    );
     p.push_str("  - For JSON: use `json` (always available).\n");
     p.push_str("  - For dates: use `datetime` (always available).\n");
     p.push_str("  - For regex: use `re` (always available).\n");
     p.push_str("- Only use third-party packages (`requests`, `pandas`, etc.) when there is no stdlib alternative.\n");
-    p.push_str("- **CRITICAL**: ALL imports MUST be placed at the top of the `execute` function body,\n");
-    p.push_str("  BEFORE any use of those modules. Never use a module without importing it first.\n\n");
+    p.push_str(
+        "- **CRITICAL**: ALL imports MUST be placed at the top of the `execute` function body,\n",
+    );
+    p.push_str(
+        "  BEFORE any use of those modules. Never use a module without importing it first.\n\n",
+    );
     p.push_str("## Correct HTTP Implementation Pattern\n\n");
     p.push_str("```python\n");
     p.push_str("def execute(input_value):\n");

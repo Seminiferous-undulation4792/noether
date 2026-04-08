@@ -50,7 +50,14 @@ pub fn run_composition_with_cache<E: StageExecutor + Sync>(
         cache_ref = &mut none_holder;
     }
 
-    let output = execute_node(node, input, executor, &mut stage_traces, &mut step_counter, cache_ref)?;
+    let output = execute_node(
+        node,
+        input,
+        executor,
+        &mut stage_traces,
+        &mut step_counter,
+        cache_ref,
+    )?;
 
     let duration_ms = start.elapsed().as_millis() as u64;
     let has_failures = stage_traces
@@ -83,7 +90,9 @@ fn execute_node<E: StageExecutor + Sync>(
     cache: &mut Option<&mut PureStageCache>,
 ) -> Result<Value, ExecutionError> {
     match node {
-        CompositionNode::Stage { id } => execute_stage(id, input, executor, traces, step_counter, cache),
+        CompositionNode::Stage { id } => {
+            execute_stage(id, input, executor, traces, step_counter, cache)
+        }
         CompositionNode::Const { value } => Ok(value.clone()),
         CompositionNode::Sequential { stages } => {
             let mut current = input.clone();
@@ -151,7 +160,8 @@ fn execute_node<E: StageExecutor + Sync>(
             if_true,
             if_false,
         } => {
-            let pred_result = execute_node(predicate, input, executor, traces, step_counter, cache)?;
+            let pred_result =
+                execute_node(predicate, input, executor, traces, step_counter, cache)?;
             let condition = match &pred_result {
                 Value::Bool(b) => *b,
                 _ => false,
@@ -166,7 +176,14 @@ fn execute_node<E: StageExecutor + Sync>(
             let source_output = execute_node(source, input, executor, traces, step_counter, cache)?;
             let mut results = Vec::new();
             for target in targets {
-                let result = execute_node(target, &source_output, executor, traces, step_counter, cache)?;
+                let result = execute_node(
+                    target,
+                    &source_output,
+                    executor,
+                    traces,
+                    step_counter,
+                    cache,
+                )?;
                 results.push(result);
             }
             Ok(Value::Array(results))
@@ -181,7 +198,8 @@ fn execute_node<E: StageExecutor + Sync>(
                 } else {
                     input.clone()
                 };
-                let result = execute_node(source, &source_input, executor, traces, step_counter, cache)?;
+                let result =
+                    execute_node(source, &source_input, executor, traces, step_counter, cache)?;
                 merged.insert(format!("source_{i}"), result);
             }
             execute_node(
@@ -210,9 +228,7 @@ fn execute_node<E: StageExecutor + Sync>(
                 attempts: *max_attempts,
             }))
         }
-        CompositionNode::RemoteStage { url, .. } => {
-            execute_remote_stage(url, input)
-        }
+        CompositionNode::RemoteStage { url, .. } => execute_remote_stage(url, input),
     }
 }
 
@@ -303,14 +319,15 @@ fn execute_remote_stage(url: &str, input: &Value) -> Result<Value, ExecutionErro
 
         let client = Client::new();
         let body = serde_json::json!({ "input": input });
-        let resp = client
-            .post(url)
-            .json(&body)
-            .send()
-            .map_err(|e| ExecutionError::RemoteCallFailed {
-                url: url.to_string(),
-                reason: e.to_string(),
-            })?;
+        let resp =
+            client
+                .post(url)
+                .json(&body)
+                .send()
+                .map_err(|e| ExecutionError::RemoteCallFailed {
+                    url: url.to_string(),
+                    reason: e.to_string(),
+                })?;
 
         let resp_json: Value = resp.json().map_err(|e| ExecutionError::RemoteCallFailed {
             url: url.to_string(),

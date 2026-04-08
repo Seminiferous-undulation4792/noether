@@ -47,7 +47,11 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
 }
 
 // ── RuntimeExecutor ───────────────────────────────────────────────────────────
@@ -241,12 +245,7 @@ impl RuntimeExecutor {
         // session return the cached response instead of making a redundant API call.
         let dedup_key = {
             use sha2::{Digest, Sha256};
-            let key_data = format!(
-                "{}:{}:{}",
-                model,
-                system_opt.unwrap_or(""),
-                prompt
-            );
+            let key_data = format!("{}:{}:{}", model, system_opt.unwrap_or(""), prompt);
             hex::encode(Sha256::digest(key_data.as_bytes()))
         };
 
@@ -557,7 +556,11 @@ impl RuntimeExecutor {
     ///
     /// Input: `{ stages: List<Text>, operators: List<Text> }`
     /// Output: `{ valid: Bool, errors: List<Text>, warnings: List<Text> }`
-    fn composition_verify(&self, stage_id: &StageId, input: &Value) -> Result<Value, ExecutionError> {
+    fn composition_verify(
+        &self,
+        stage_id: &StageId,
+        input: &Value,
+    ) -> Result<Value, ExecutionError> {
         let stage_ids: Vec<&str> = input["stages"]
             .as_array()
             .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
@@ -577,7 +580,14 @@ impl RuntimeExecutor {
         }
 
         // Validate operator names
-        let valid_ops = ["sequential", "parallel", "branch", "fanout", "merge", "retry"];
+        let valid_ops = [
+            "sequential",
+            "parallel",
+            "branch",
+            "fanout",
+            "merge",
+            "retry",
+        ];
         for op in &operators {
             let op_lc = op.to_lowercase();
             if !valid_ops.contains(&op_lc.as_str()) {
@@ -600,7 +610,10 @@ impl RuntimeExecutor {
                         warnings.push(format!("stage {} ({}) is deprecated", sid, s.description));
                     }
                     if s.lifecycle == "tombstone" {
-                        errors.push(format!("stage {} is a tombstone and cannot be executed", sid));
+                        errors.push(format!(
+                            "stage {} is a tombstone and cannot be executed",
+                            sid
+                        ));
                     }
                     resolved_stages.push(s);
                 }
@@ -612,7 +625,8 @@ impl RuntimeExecutor {
 
         // For sequential compositions: type-check consecutive pairs.
         // We parse the stored display strings back to NType for comparison.
-        if operators.iter().any(|op| op.to_lowercase() == "sequential") && resolved_stages.len() > 1 {
+        if operators.iter().any(|op| op.to_lowercase() == "sequential") && resolved_stages.len() > 1
+        {
             for i in 0..resolved_stages.len() - 1 {
                 let out_str = &resolved_stages[i].output_display;
                 let in_str = &resolved_stages[i + 1].input_display;
@@ -867,10 +881,15 @@ mod tests {
             .map(|s| s.id.clone())
             .collect();
 
-        let result = rt.execute(&verify_id, &json!({
-            "stages": ids,
-            "operators": ["sequential"]
-        })).unwrap();
+        let result = rt
+            .execute(
+                &verify_id,
+                &json!({
+                    "stages": ids,
+                    "operators": ["sequential"]
+                }),
+            )
+            .unwrap();
         // Should succeed even if types don't match (warnings, not errors for this)
         assert!(result["errors"].is_array());
         assert!(result["warnings"].is_array());
@@ -886,14 +905,21 @@ mod tests {
             .map(|(k, _)| StageId(k.clone()))
             .unwrap();
 
-        let result = rt.execute(&verify_id, &json!({
-            "stages": ["nonexistent-stage-id"],
-            "operators": []
-        })).unwrap();
+        let result = rt
+            .execute(
+                &verify_id,
+                &json!({
+                    "stages": ["nonexistent-stage-id"],
+                    "operators": []
+                }),
+            )
+            .unwrap();
         assert_eq!(result["valid"], json!(false));
-        assert!(result["errors"].as_array().unwrap().iter().any(|e| {
-            e.as_str().unwrap_or("").contains("not found")
-        }));
+        assert!(result["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| { e.as_str().unwrap_or("").contains("not found") }));
     }
 
     #[test]
@@ -954,8 +980,10 @@ mod tests {
             let _ = store.put(s);
         }
 
-        let rt = RuntimeExecutor::from_store(&store)
-            .with_llm(Box::new(MockLlmProvider::new(mock_response)), LlmConfig::default());
+        let rt = RuntimeExecutor::from_store(&store).with_llm(
+            Box::new(MockLlmProvider::new(mock_response)),
+            LlmConfig::default(),
+        );
         let rt = Arc::new(rt);
 
         let classify_id = rt
@@ -986,7 +1014,9 @@ mod tests {
         assert_eq!(results.len(), 16);
         let first = results[0].as_ref().expect("first result must be Ok");
         for (i, r) in results.iter().enumerate() {
-            let val = r.as_ref().unwrap_or_else(|e| panic!("thread {i} failed: {e}"));
+            let val = r
+                .as_ref()
+                .unwrap_or_else(|e| panic!("thread {i} failed: {e}"));
             assert_eq!(
                 val["category"], first["category"],
                 "thread {i} returned different category"

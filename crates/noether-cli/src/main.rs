@@ -218,10 +218,8 @@ fn init_local_store() -> JsonFileStore {
     // are applied automatically, replacing any old unsigned copies.
     // Exception: if a stdlib stage has been explicitly tombstoned, preserve that
     // decision — tombstone is a permanent administrative action.
-    let stdlib_ids: std::collections::HashSet<String> = load_stdlib()
-        .iter()
-        .map(|s| s.id.0.clone())
-        .collect();
+    let stdlib_ids: std::collections::HashSet<String> =
+        load_stdlib().iter().map(|s| s.id.0.clone()).collect();
     for stage in load_stdlib() {
         let already_tombstoned = store
             .get(&stage.id)
@@ -277,14 +275,18 @@ fn load_or_create_author_key(dir: &std::path::Path) -> SigningKey {
             let arr: [u8; 32] = bytes.try_into().expect("checked length");
             return SigningKey::from_bytes(&arr);
         }
-        eprintln!("Warning: author key at {} is corrupt — regenerating.", key_path.display());
+        eprintln!(
+            "Warning: author key at {} is corrupt — regenerating.",
+            key_path.display()
+        );
     }
     let key = SigningKey::generate(&mut OsRng);
     let hex = hex::encode(key.to_bytes());
-    if let Err(e) = std::fs::create_dir_all(dir)
-        .and_then(|_| std::fs::write(&key_path, &hex))
-    {
-        eprintln!("Warning: could not save author key to {}: {e}", key_path.display());
+    if let Err(e) = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&key_path, &hex)) {
+        eprintln!(
+            "Warning: could not save author key to {}: {e}",
+            key_path.display()
+        );
     } else {
         eprintln!(
             "Generated new author signing key → {}\n\
@@ -382,7 +384,11 @@ fn main() {
                     let index = build_index(store.as_ref());
                     commands::store::cmd_stats(store.as_ref(), &index);
                 }
-                StoreCommands::Retro { dry_run, apply, threshold } => {
+                StoreCommands::Retro {
+                    dry_run,
+                    apply,
+                    threshold,
+                } => {
                     let index = build_index(store.as_ref());
                     commands::store::cmd_retro(store.as_mut(), &index, dry_run, apply, threshold);
                 }

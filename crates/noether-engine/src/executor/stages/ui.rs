@@ -15,9 +15,9 @@ fn fail(stage: &str, msg: impl Into<String>) -> ExecutionError {
 pub fn router(input: &Value) -> Result<Value, ExecutionError> {
     let route = input["route"].as_str().unwrap_or("/");
     let default = input["default"].as_str().unwrap_or("/");
-    let routes = input["routes"].as_object().ok_or_else(|| {
-        fail("noether.router", "routes must be a record (object)")
-    })?;
+    let routes = input["routes"]
+        .as_object()
+        .ok_or_else(|| fail("noether.router", "routes must be a record (object)"))?;
 
     // Exact match first
     if let Some(vnode) = routes.get(route) {
@@ -38,10 +38,12 @@ pub fn router(input: &Value) -> Result<Value, ExecutionError> {
     }
 
     // Default fallback
-    routes
-        .get(default)
-        .cloned()
-        .ok_or_else(|| fail("noether.router", format!("default route '{default}' not found in routes")))
+    routes.get(default).cloned().ok_or_else(|| {
+        fail(
+            "noether.router",
+            format!("default route '{default}' not found in routes"),
+        )
+    })
 }
 
 #[cfg(test)]

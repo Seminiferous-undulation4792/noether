@@ -29,12 +29,16 @@ pub struct CapabilityPolicy {
 impl CapabilityPolicy {
     /// A policy that allows every capability.
     pub fn allow_all() -> Self {
-        Self { allowed: BTreeSet::new() }
+        Self {
+            allowed: BTreeSet::new(),
+        }
     }
 
     /// A policy that permits only the listed capabilities.
     pub fn restrict(caps: impl IntoIterator<Item = Capability>) -> Self {
-        Self { allowed: caps.into_iter().collect() }
+        Self {
+            allowed: caps.into_iter().collect(),
+        }
     }
 
     fn is_allowed(&self, cap: &Capability) -> bool {
@@ -96,7 +100,7 @@ fn collect_capability_violations(
             }
         }
         CompositionNode::RemoteStage { .. } => {} // remote stages have no local capabilities
-        CompositionNode::Const { .. } => {} // no capabilities in a constant
+        CompositionNode::Const { .. } => {}       // no capabilities in a constant
         CompositionNode::Sequential { stages } => {
             for s in stages {
                 collect_capability_violations(s, store, policy, violations);
@@ -107,7 +111,11 @@ fn collect_capability_violations(
                 collect_capability_violations(branch, store, policy, violations);
             }
         }
-        CompositionNode::Branch { predicate, if_true, if_false } => {
+        CompositionNode::Branch {
+            predicate,
+            if_true,
+            if_false,
+        } => {
             collect_capability_violations(predicate, store, policy, violations);
             collect_capability_violations(if_true, store, policy, violations);
             collect_capability_violations(if_false, store, policy, violations);
@@ -238,7 +246,11 @@ fn collect_signature_violations(
                 collect_signature_violations(branch, store, violations);
             }
         }
-        CompositionNode::Branch { predicate, if_true, if_false } => {
+        CompositionNode::Branch {
+            predicate,
+            if_true,
+            if_false,
+        } => {
             collect_signature_violations(predicate, store, violations);
             collect_signature_violations(if_true, store, violations);
             collect_signature_violations(if_false, store, violations);
@@ -451,7 +463,7 @@ fn collect_warnings_inner(
             }
         }
         CompositionNode::RemoteStage { .. } => {} // remote calls have no local effects to warn about
-        CompositionNode::Const { .. } => {} // no effects in a constant
+        CompositionNode::Const { .. } => {}       // no effects in a constant
         CompositionNode::Sequential { stages } => {
             for (i, s) in stages.iter().enumerate() {
                 collect_warnings_inner(s, store, warnings, total_cost, false);
@@ -502,7 +514,11 @@ fn collect_warnings_inner(
                 collect_warnings_inner(branch, store, warnings, total_cost, false);
             }
         }
-        CompositionNode::Branch { predicate, if_true, if_false } => {
+        CompositionNode::Branch {
+            predicate,
+            if_true,
+            if_false,
+        } => {
             collect_warnings_inner(predicate, store, warnings, total_cost, false);
             collect_warnings_inner(if_true, store, warnings, total_cost, false);
             collect_warnings_inner(if_false, store, warnings, total_cost, false);

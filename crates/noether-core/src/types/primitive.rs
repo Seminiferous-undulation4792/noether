@@ -13,7 +13,10 @@ pub enum NType {
     Bool,
     Bytes,
     List(Box<NType>),
-    Map { key: Box<NType>, value: Box<NType> },
+    Map {
+        key: Box<NType>,
+        value: Box<NType>,
+    },
     Null,
     Number,
     Record(BTreeMap<String, NType>),

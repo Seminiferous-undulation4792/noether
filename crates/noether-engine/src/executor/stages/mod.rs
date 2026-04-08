@@ -1,8 +1,8 @@
+#[cfg(feature = "native")]
+pub mod arrow;
 pub mod collections;
 pub mod control;
 pub mod data;
-#[cfg(feature = "native")]
-pub mod arrow;
 #[cfg(feature = "native")]
 pub mod io;
 #[cfg(feature = "native")]

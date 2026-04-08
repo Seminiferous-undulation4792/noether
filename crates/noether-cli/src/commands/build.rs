@@ -79,11 +79,7 @@ pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
             let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
             eprintln!(
                 "{}",
-                acli_error_hints(
-                    &format!("{} type error(s)", msgs.len()),
-                    None,
-                    Some(msgs),
-                )
+                acli_error_hints(&format!("{} type error(s)", msgs.len()), None, Some(msgs),)
             );
             std::process::exit(2);
         }
@@ -92,8 +88,7 @@ pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
     // ── 3. Signature pre-flight ───────────────────────────────────────────────
     // Only check non-stdlib stages: stdlib stages are trusted via load_stdlib()
     // and may have been stored before signatures were introduced.
-    let stdlib_ids_for_sig: HashSet<StageId> =
-        load_stdlib().into_iter().map(|s| s.id).collect();
+    let stdlib_ids_for_sig: HashSet<StageId> = load_stdlib().into_iter().map(|s| s.id).collect();
     let sig_violations: Vec<_> = verify_signatures(&graph.root, store)
         .into_iter()
         .filter(|v| !stdlib_ids_for_sig.contains(&v.stage_id))
@@ -151,7 +146,13 @@ pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
     // Cargo package names: [a-zA-Z0-9_-]
     let package_name: String = app_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     let description = opts
@@ -189,7 +190,10 @@ pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
     let src_dir = build_dir.join("src");
 
     if let Err(e) = std::fs::create_dir_all(&src_dir) {
-        eprintln!("{}", acli_error(&format!("Failed to create build dir: {e}")));
+        eprintln!(
+            "{}",
+            acli_error(&format!("Failed to create build dir: {e}"))
+        );
         std::process::exit(1);
     }
 
@@ -210,7 +214,13 @@ pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
     );
     write_file(
         &build_dir.join("Cargo.toml"),
-        &generate_cargo_toml(&package_name, app_version, &core_path, &store_path, &engine_path),
+        &generate_cargo_toml(
+            &package_name,
+            app_version,
+            &core_path,
+            &store_path,
+            &engine_path,
+        ),
     );
     write_file(
         &src_dir.join("main.rs"),
@@ -234,7 +244,10 @@ pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
             std::process::exit(1);
         }
         Ok(s) if !s.success() => {
-            eprintln!("{}", acli_error("cargo build failed — see compiler errors above"));
+            eprintln!(
+                "{}",
+                acli_error("cargo build failed — see compiler errors above")
+            );
             eprintln!(
                 "Build directory preserved for inspection: {}",
                 build_dir.display()
@@ -294,10 +307,7 @@ pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            let err = Command::new(output_path)
-                .arg("--serve")
-                .arg(addr)
-                .exec();
+            let err = Command::new(output_path).arg("--serve").arg(addr).exec();
             // exec() only returns on error
             eprintln!("{}", acli_error(&format!("Failed to exec server: {err}")));
             std::process::exit(1);
@@ -319,13 +329,7 @@ pub fn cmd_build(store: &dyn StageStore, opts: BuildOptions<'_>) {
 
 // ── Code generation ───────────────────────────────────────────────────────────
 
-fn generate_cargo_toml(
-    name: &str,
-    version: &str,
-    core: &str,
-    store: &str,
-    engine: &str,
-) -> String {
+fn generate_cargo_toml(name: &str, version: &str, core: &str, store: &str, engine: &str) -> String {
     format!(
         r#"[package]
 name = "{name}"

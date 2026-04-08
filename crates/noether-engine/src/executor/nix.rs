@@ -186,8 +186,7 @@ impl NixExecutor {
             .map(|i| i.code.as_str())
             .unwrap_or("");
 
-        let (nix_subcommand, args) =
-            Self::build_nix_command(language, script, code);
+        let (nix_subcommand, args) = Self::build_nix_command(language, script, code);
 
         let mut child = Command::new(&self.nix_bin)
             .arg(nix_subcommand)
@@ -242,11 +241,7 @@ impl NixExecutor {
                 if extra_pkgs.is_empty() {
                     (
                         "run",
-                        vec![
-                            "nixpkgs#python3".into(),
-                            "--".into(),
-                            script_path,
-                        ],
+                        vec!["nixpkgs#python3".into(), "--".into(), script_path],
                     )
                 } else {
                     // Use `nix shell` with only the third-party packages.
@@ -266,10 +261,7 @@ impl NixExecutor {
                 "run",
                 vec!["nixpkgs#nodejs".into(), "--".into(), script_path],
             ),
-            _ => (
-                "run",
-                vec!["nixpkgs#bash".into(), "--".into(), script_path],
-            ),
+            _ => ("run", vec!["nixpkgs#bash".into(), "--".into(), script_path]),
         }
     }
 
@@ -278,32 +270,32 @@ impl NixExecutor {
     fn detect_python_packages(code: &str) -> Vec<&'static str> {
         // Map of Python import name → nixpkgs python3Packages attribute name.
         const KNOWN: &[(&str, &str)] = &[
-            ("requests",  "requests"),
-            ("httpx",     "httpx"),
-            ("aiohttp",   "aiohttp"),
-            ("bs4",       "beautifulsoup4"),
-            ("lxml",      "lxml"),
-            ("pandas",    "pandas"),
-            ("numpy",     "numpy"),
-            ("scipy",     "scipy"),
-            ("sklearn",   "scikit-learn"),
-            ("PIL",       "Pillow"),
-            ("cv2",       "opencv4"),
-            ("yaml",      "pyyaml"),
-            ("toml",      "toml"),
-            ("dateutil",  "python-dateutil"),
-            ("pytz",      "pytz"),
-            ("boto3",     "boto3"),
-            ("psycopg2",  "psycopg2"),
-            ("pymongo",   "pymongo"),
-            ("redis",     "redis"),
-            ("celery",    "celery"),
-            ("fastapi",   "fastapi"),
-            ("pydantic",  "pydantic"),
+            ("requests", "requests"),
+            ("httpx", "httpx"),
+            ("aiohttp", "aiohttp"),
+            ("bs4", "beautifulsoup4"),
+            ("lxml", "lxml"),
+            ("pandas", "pandas"),
+            ("numpy", "numpy"),
+            ("scipy", "scipy"),
+            ("sklearn", "scikit-learn"),
+            ("PIL", "Pillow"),
+            ("cv2", "opencv4"),
+            ("yaml", "pyyaml"),
+            ("toml", "toml"),
+            ("dateutil", "python-dateutil"),
+            ("pytz", "pytz"),
+            ("boto3", "boto3"),
+            ("psycopg2", "psycopg2"),
+            ("pymongo", "pymongo"),
+            ("redis", "redis"),
+            ("celery", "celery"),
+            ("fastapi", "fastapi"),
+            ("pydantic", "pydantic"),
             ("cryptography", "cryptography"),
-            ("jwt",       "pyjwt"),
-            ("paramiko",  "paramiko"),
-            ("dotenv",    "python-dotenv"),
+            ("jwt", "pyjwt"),
+            ("paramiko", "paramiko"),
+            ("dotenv", "python-dotenv"),
         ];
 
         let mut found: Vec<&'static str> = Vec::new();
@@ -408,14 +400,20 @@ mod tests {
     fn detect_python_packages_requests() {
         let code = "import requests\ndef execute(v):\n    return requests.get(v).json()";
         let pkgs = NixExecutor::detect_python_packages(code);
-        assert!(pkgs.contains(&"requests"), "expected 'requests' in {pkgs:?}");
+        assert!(
+            pkgs.contains(&"requests"),
+            "expected 'requests' in {pkgs:?}"
+        );
     }
 
     #[test]
     fn detect_python_packages_stdlib_only() {
         let code = "import urllib.request, json\ndef execute(v):\n    return json.loads(v)";
         let pkgs = NixExecutor::detect_python_packages(code);
-        assert!(pkgs.is_empty(), "stdlib imports should not trigger packages: {pkgs:?}");
+        assert!(
+            pkgs.is_empty(),
+            "stdlib imports should not trigger packages: {pkgs:?}"
+        );
     }
 
     #[test]
@@ -430,7 +428,8 @@ mod tests {
     #[test]
     fn build_nix_command_no_packages() {
         use std::path::Path;
-        let (sub, args) = NixExecutor::build_nix_command("python", Path::new("/tmp/x.py"), "import json");
+        let (sub, args) =
+            NixExecutor::build_nix_command("python", Path::new("/tmp/x.py"), "import json");
         assert_eq!(sub, "run");
         assert!(args.iter().any(|a| a.contains("python3")));
         assert!(!args.iter().any(|a| a.contains("shell")));
@@ -439,12 +438,16 @@ mod tests {
     #[test]
     fn build_nix_command_with_requests() {
         use std::path::Path;
-        let (sub, args) = NixExecutor::build_nix_command("python", Path::new("/tmp/x.py"), "import requests");
+        let (sub, args) =
+            NixExecutor::build_nix_command("python", Path::new("/tmp/x.py"), "import requests");
         assert_eq!(sub, "shell");
         assert!(args.iter().any(|a| a.contains("python3Packages.requests")));
         assert!(args.iter().any(|a| a == "--command"));
         // Must NOT include bare nixpkgs#python3 — it conflicts with python3Packages.*
-        assert!(!args.iter().any(|a| a == "nixpkgs#python3"), "bare python3 conflicts: {args:?}");
+        assert!(
+            !args.iter().any(|a| a == "nixpkgs#python3"),
+            "bare python3 conflicts: {args:?}"
+        );
     }
 
     #[test]

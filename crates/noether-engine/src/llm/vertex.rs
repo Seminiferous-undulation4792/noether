@@ -47,13 +47,9 @@ enum TokenSource {
         cached: Mutex<Option<CachedToken>>,
     },
     /// GCE instance metadata server — zero-config inside Google Cloud.
-    MetadataServer {
-        cached: Mutex<Option<CachedToken>>,
-    },
+    MetadataServer { cached: Mutex<Option<CachedToken>> },
     /// `gcloud auth print-access-token` subprocess — local dev fallback when no ADC file.
-    GcloudSubprocess {
-        cached: Mutex<Option<CachedToken>>,
-    },
+    GcloudSubprocess { cached: Mutex<Option<CachedToken>> },
 }
 
 impl TokenSource {
@@ -74,8 +70,7 @@ impl TokenSource {
                         return Ok(c.access_token.clone());
                     }
                 }
-                let (token, expires_in) =
-                    oauth2_refresh(client_id, client_secret, refresh_token)?;
+                let (token, expires_in) = oauth2_refresh(client_id, client_secret, refresh_token)?;
                 *guard = Some(CachedToken::new(token.clone(), expires_in));
                 Ok(token)
             }
@@ -210,8 +205,8 @@ fn resolve_token_source() -> Result<TokenSource, String> {
 
     // 3. ADC file (~/.config/gcloud/application_default_credentials.json)
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let adc_path = std::path::PathBuf::from(&home)
-        .join(".config/gcloud/application_default_credentials.json");
+    let adc_path =
+        std::path::PathBuf::from(&home).join(".config/gcloud/application_default_credentials.json");
     if adc_path.exists() {
         if let Ok(source) = load_credentials_file(adc_path.to_str().unwrap_or("")) {
             return Ok(source);
@@ -232,14 +227,12 @@ fn resolve_token_source() -> Result<TokenSource, String> {
         });
     }
 
-    Err(
-        "No Google credentials found. Options:\n\
+    Err("No Google credentials found. Options:\n\
          • Run `gcloud auth application-default login`\n\
          • Set VERTEX_AI_TOKEN to an access token\n\
          • Set GOOGLE_APPLICATION_CREDENTIALS to a service account key file\n\
          • Run on GCE/Cloud Run/GKE (metadata server)"
-            .into(),
-    )
+        .into())
 }
 
 fn load_credentials_file(path: &str) -> Result<TokenSource, String> {

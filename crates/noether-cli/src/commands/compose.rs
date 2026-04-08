@@ -1,10 +1,10 @@
 use crate::output::{acli_error, acli_error_hints, acli_ok, acli_ok_cached};
+use acli::output::CacheMeta;
 use noether_engine::agent::SynthesisResult;
 use noether_engine::checker::{
     check_capabilities, check_graph, collect_effect_warnings, verify_signatures, CapabilityPolicy,
 };
 use noether_engine::composition_cache::CompositionCache;
-use acli::output::CacheMeta;
 use noether_engine::executor::composite::CompositeExecutor;
 use noether_engine::executor::runner::run_composition;
 use noether_engine::index::SemanticIndex;
@@ -48,18 +48,21 @@ pub fn cmd_compose(
                 "Cache hit (model: {}, composed: {}s ago). Use --force to recompose.",
                 cached.model, age_secs,
             );
-                    emit_result(store, EmitCtx {
-                model: opts.model,
-                dry_run: opts.dry_run,
-                input: opts.input,
-                from_cache: true,
-                cache_age_secs: age_secs,
-                attempts: 0,
-                synthesized: &[],
-                graph: &cached.graph.clone(),
-                policy: opts.policy,
-                budget_cents: opts.budget_cents,
-            });
+            emit_result(
+                store,
+                EmitCtx {
+                    model: opts.model,
+                    dry_run: opts.dry_run,
+                    input: opts.input,
+                    from_cache: true,
+                    cache_age_secs: age_secs,
+                    attempts: 0,
+                    synthesized: &[],
+                    graph: &cached.graph.clone(),
+                    policy: opts.policy,
+                    budget_cents: opts.budget_cents,
+                },
+            );
             return;
         }
     }
@@ -86,18 +89,21 @@ pub fn cmd_compose(
     }
 
     let (graph, synthesized, attempts) = (result.graph, result.synthesized, result.attempts);
-    emit_result(store, EmitCtx {
-        model: opts.model,
-        dry_run: opts.dry_run,
-        input: opts.input,
-        from_cache: false,
-        cache_age_secs: 0,
-        attempts,
-        synthesized: &synthesized,
-        graph: &graph,
-        policy: opts.policy,
-        budget_cents: opts.budget_cents,
-    });
+    emit_result(
+        store,
+        EmitCtx {
+            model: opts.model,
+            dry_run: opts.dry_run,
+            input: opts.input,
+            from_cache: false,
+            cache_age_secs: 0,
+            attempts,
+            synthesized: &synthesized,
+            graph: &graph,
+            policy: opts.policy,
+            budget_cents: opts.budget_cents,
+        },
+    );
 }
 
 struct EmitCtx<'a> {
@@ -118,7 +124,8 @@ fn emit_result(store: &mut dyn StageStore, ctx: EmitCtx<'_>) {
     let composition_id = compute_composition_id(ctx.graph).unwrap_or_else(|_| "unknown".into());
     let graph_json = serialize_graph(ctx.graph).unwrap_or_else(|_| "{}".into());
 
-    let synthesized_json: Vec<serde_json::Value> = ctx.synthesized
+    let synthesized_json: Vec<serde_json::Value> = ctx
+        .synthesized
         .iter()
         .map(|s| {
             json!({
@@ -254,11 +261,17 @@ fn emit_result(store: &mut dyn StageStore, ctx: EmitCtx<'_>) {
                 "warnings": warning_strings,
             });
             if ctx.from_cache {
-                println!("{}", acli_ok_cached(data, CacheMeta {
-                    hit: true,
-                    key: Some(composition_id.clone()),
-                    age_seconds: Some(ctx.cache_age_secs),
-                }));
+                println!(
+                    "{}",
+                    acli_ok_cached(
+                        data,
+                        CacheMeta {
+                            hit: true,
+                            key: Some(composition_id.clone()),
+                            age_seconds: Some(ctx.cache_age_secs),
+                        }
+                    )
+                );
             } else {
                 println!("{}", acli_ok(data));
             }

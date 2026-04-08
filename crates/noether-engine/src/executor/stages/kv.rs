@@ -20,9 +20,7 @@ fn kv_path() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            std::path::Path::new(&home)
-                .join(".noether")
-                .join("kv.db")
+            std::path::Path::new(&home).join(".noether").join("kv.db")
         })
 }
 
@@ -35,8 +33,7 @@ where
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let conn = Connection::open(&path)
-            .expect("failed to open kv.db");
+        let conn = Connection::open(&path).expect("failed to open kv.db");
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS kv (
                 namespace TEXT NOT NULL DEFAULT '',
@@ -49,12 +46,10 @@ where
         Mutex::new(conn)
     });
 
-    let conn = mutex
-        .lock()
-        .map_err(|e| ExecutionError::StageFailed {
-            stage_id: StageId("kv".into()),
-            message: format!("kv lock poisoned: {e}"),
-        })?;
+    let conn = mutex.lock().map_err(|e| ExecutionError::StageFailed {
+        stage_id: StageId("kv".into()),
+        message: format!("kv lock poisoned: {e}"),
+    })?;
     f(&conn).map_err(|e| ExecutionError::StageFailed {
         stage_id: StageId("kv".into()),
         message: e.to_string(),
@@ -79,8 +74,7 @@ pub fn kv_set(input: &Value) -> Result<Value, ExecutionError> {
         .get("value")
         .ok_or_else(|| fail("kv_set", "missing field 'value'"))?;
     let ns = ns(input);
-    let serialized = serde_json::to_string(value)
-        .map_err(|e| fail("kv_set", e.to_string()))?;
+    let serialized = serde_json::to_string(value).map_err(|e| fail("kv_set", e.to_string()))?;
 
     with_conn(|conn| {
         conn.execute(
@@ -100,8 +94,7 @@ pub fn kv_get(input: &Value) -> Result<Value, ExecutionError> {
     let ns = ns(input);
 
     with_conn(|conn| {
-        let mut stmt =
-            conn.prepare("SELECT value FROM kv WHERE namespace = ?1 AND key = ?2")?;
+        let mut stmt = conn.prepare("SELECT value FROM kv WHERE namespace = ?1 AND key = ?2")?;
         let mut rows = stmt.query(params![ns, key])?;
         match rows.next()? {
             Some(row) => {
@@ -138,26 +131,21 @@ pub fn kv_exists(input: &Value) -> Result<Value, ExecutionError> {
     let ns = ns(input);
 
     with_conn(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT 1 FROM kv WHERE namespace = ?1 AND key = ?2 LIMIT 1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT 1 FROM kv WHERE namespace = ?1 AND key = ?2 LIMIT 1")?;
         let exists = stmt.exists(params![ns, key])?;
         Ok(Value::Bool(exists))
     })
 }
 
 pub fn kv_list(input: &Value) -> Result<Value, ExecutionError> {
-    let prefix = input
-        .get("prefix")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let prefix = input.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
     let ns = ns(input);
 
     with_conn(|conn| {
         let pattern = format!("{prefix}%");
-        let mut stmt = conn.prepare(
-            "SELECT key FROM kv WHERE namespace = ?1 AND key LIKE ?2 ORDER BY key",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT key FROM kv WHERE namespace = ?1 AND key LIKE ?2 ORDER BY key")?;
         let keys: Result<Vec<Value>, _> = stmt
             .query_map(params![ns, pattern], |row| {
                 let k: String = row.get(0)?;
@@ -242,8 +230,14 @@ mod tests {
     fn exists_true_and_false() {
         let ns = ns_id();
         kv_set(&json!({"key": "e1", "value": 0, "namespace": ns})).unwrap();
-        assert_eq!(kv_exists(&json!({"key": "e1", "namespace": ns})).unwrap(), json!(true));
-        assert_eq!(kv_exists(&json!({"key": "nope", "namespace": ns})).unwrap(), json!(false));
+        assert_eq!(
+            kv_exists(&json!({"key": "e1", "namespace": ns})).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            kv_exists(&json!({"key": "nope", "namespace": ns})).unwrap(),
+            json!(false)
+        );
     }
 
     #[test]

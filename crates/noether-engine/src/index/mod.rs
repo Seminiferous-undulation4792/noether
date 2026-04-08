@@ -234,10 +234,7 @@ impl SemanticIndex {
     ///
     /// Returns pairs `(id_a, id_b, similarity)` where semantic similarity >= `threshold`.
     /// Each pair appears only once (id_a < id_b lexicographically).
-    pub fn find_near_duplicates(
-        &self,
-        threshold: f32,
-    ) -> Vec<(StageId, StageId, f32)> {
+    pub fn find_near_duplicates(&self, threshold: f32) -> Vec<(StageId, StageId, f32)> {
         use search::cosine_similarity;
 
         let entries = self.semantic_index.entries().to_vec();

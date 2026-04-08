@@ -134,5 +134,7 @@ fn build_vertex_embedding() -> Result<Box<dyn EmbeddingProvider>, String> {
     let dimensions = std::env::var("VERTEX_AI_EMBEDDING_DIMENSIONS")
         .ok()
         .and_then(|s| s.parse().ok());
-    Ok(Box::new(VertexAiEmbeddingProvider::new(config, model, dimensions)))
+    Ok(Box::new(VertexAiEmbeddingProvider::new(
+        config, model, dimensions,
+    )))
 }

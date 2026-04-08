@@ -145,10 +145,7 @@ pub fn num_sum(input: &Value) -> Result<Value, ExecutionError> {
     let items = input
         .as_array()
         .ok_or_else(|| fail("num_sum", "input must be an array of numbers"))?;
-    let sum: f64 = items
-        .iter()
-        .map(|v| v.as_f64().unwrap_or(0.0))
-        .sum();
+    let sum: f64 = items.iter().map(|v| v.as_f64().unwrap_or(0.0)).sum();
     Ok(json!(sum))
 }
 

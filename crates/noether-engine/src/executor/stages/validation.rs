@@ -13,7 +13,10 @@ use sha2::{Digest, Sha256};
 // ── helpers ────────────────────────────────────────────────────────────────
 
 fn err(name: &str, message: impl Into<String>) -> ExecutionError {
-    ExecutionError::StageFailed { stage_id: StageId(name.into()), message: message.into() }
+    ExecutionError::StageFailed {
+        stage_id: StageId(name.into()),
+        message: message.into(),
+    }
 }
 
 // ── individual check stages ─────────────────────────────────────────────────
@@ -24,7 +27,10 @@ pub fn verify_stage_content_hash(input: &Value) -> Result<Value, ExecutionError>
     let stage_id = input["id"].as_str().unwrap_or("");
 
     let sig_json = serde_json::to_string(&input["signature"]).map_err(|e| {
-        err("verify_stage_content_hash", format!("cannot serialise signature: {e}"))
+        err(
+            "verify_stage_content_hash",
+            format!("cannot serialise signature: {e}"),
+        )
     })?;
 
     let computed = hex::encode(Sha256::digest(sig_json.as_bytes()));
@@ -104,9 +110,7 @@ pub fn check_stage_description(input: &Value) -> Result<Value, ExecutionError> {
 pub fn check_stage_examples(input: &Value) -> Result<Value, ExecutionError> {
     let count = input["examples"].as_array().map(|a| a.len()).unwrap_or(0);
     let warning: Value = if count == 0 {
-        Value::String(
-            "no examples provided — semantic search quality will be reduced".into(),
-        )
+        Value::String("no examples provided — semantic search quality will be reduced".into())
     } else {
         Value::Null
     };

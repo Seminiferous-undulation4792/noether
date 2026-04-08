@@ -45,7 +45,9 @@ pub fn cmd_build_mobile(store: &dyn noether_store::StageStore, opts: BuildOption
     // Temporarily redirect browser output to temp dir
     let browser_opts = BuildOptions {
         graph_path: opts.graph_path,
-        output_path: browser_tmp.to_str().unwrap_or("/tmp/noether-mobile-browser"),
+        output_path: browser_tmp
+            .to_str()
+            .unwrap_or("/tmp/noether-mobile-browser"),
         app_name: opts.app_name,
         description: opts.description,
         target: "browser",
@@ -55,13 +57,19 @@ pub fn cmd_build_mobile(store: &dyn noether_store::StageStore, opts: BuildOption
 
     // ── 2. Create output directory structure ──────────────────────────────────
     if let Err(e) = std::fs::create_dir_all(&assets_dir) {
-        eprintln!("{}", acli_error(&format!("Failed to create assets dir: {e}")));
+        eprintln!(
+            "{}",
+            acli_error(&format!("Failed to create assets dir: {e}"))
+        );
         std::process::exit(1);
     }
 
     let write_file = |path: &Path, contents: &str| {
         if let Err(e) = std::fs::write(path, contents) {
-            eprintln!("{}", acli_error(&format!("Failed to write {}: {e}", path.display())));
+            eprintln!(
+                "{}",
+                acli_error(&format!("Failed to write {}: {e}", path.display()))
+            );
             std::process::exit(1);
         }
     };
@@ -93,14 +101,26 @@ pub fn cmd_build_mobile(store: &dyn noether_store::StageStore, opts: BuildOption
     // Expo slug: lowercase, hyphens only
     let slug: String = app_name
         .chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
 
     let app_version = env!("CARGO_PKG_VERSION");
 
     // ── 5. Generate project files ─────────────────────────────────────────────
-    write_file(&output_path.join("package.json"), &generate_package_json(&slug, app_version));
-    write_file(&output_path.join("app.json"), &generate_app_json(&app_name, &slug));
+    write_file(
+        &output_path.join("package.json"),
+        &generate_package_json(&slug, app_version),
+    );
+    write_file(
+        &output_path.join("app.json"),
+        &generate_app_json(&app_name, &slug),
+    );
     write_file(&output_path.join("tsconfig.json"), TSCONFIG);
     write_file(&output_path.join("App.tsx"), &generate_app_tsx(&app_name));
     write_file(&output_path.join("README.md"), &generate_readme(&app_name));

@@ -10,8 +10,9 @@ use noether_core::stage::{StageBuilder, StageId, StageLifecycle};
 use noether_core::types::{is_subtype_of, TypeCompatibility};
 use noether_store::{StageStore, StoreError};
 use prompt::{
-    build_effect_inference_prompt, build_synthesis_prompt, build_system_prompt, extract_effect_response, extract_json, extract_synthesis_response,
-    extract_synthesis_spec, SynthesisSpec,
+    build_effect_inference_prompt, build_synthesis_prompt, build_system_prompt,
+    extract_effect_response, extract_json, extract_synthesis_response, extract_synthesis_spec,
+    SynthesisSpec,
 };
 
 // ── Error ──────────────────────────────────────────────────────────────────
@@ -148,7 +149,9 @@ impl<'a> CompositionAgent<'a> {
 
                 // Optional raw-response debug output.
                 if std::env::var("NOETHER_DEBUG").is_ok() {
-                    eprintln!("[agent debug] attempt {attempt} raw response:\n---\n{response}\n---");
+                    eprintln!(
+                        "[agent debug] attempt {attempt} raw response:\n---\n{response}\n---"
+                    );
                 }
 
                 // Check for synthesis request (only once per compose call).
@@ -177,7 +180,10 @@ impl<'a> CompositionAgent<'a> {
                 } else if extract_synthesis_spec(&response).is_some() {
                     // Synthesis already done but LLM returned another synthesis request.
                     // Redirect: ask it to produce a composition graph using the new stage.
-                    let stage_id = synthesized.last().map(|s| s.stage_id.0.as_str()).unwrap_or("the newly synthesized stage");
+                    let stage_id = synthesized
+                        .last()
+                        .map(|s| s.stage_id.0.as_str())
+                        .unwrap_or("the newly synthesized stage");
                     last_error_type = LastErrorType::InvalidGraph;
                     last_errors = "synthesis already performed".into();
                     if attempt < self.max_retries {
@@ -336,20 +342,22 @@ impl<'a> CompositionAgent<'a> {
                 builder = builder.example(ex.input.clone(), ex.output.clone());
             }
 
-            let stage: noether_core::stage::Stage = match builder.build_signed(&self.ephemeral_signing_key, impl_hash) {
-                Ok(s) => s,
-                Err(e) => {
-                    last_error = e.to_string();
-                    continue;
-                }
-            };
+            let stage: noether_core::stage::Stage =
+                match builder.build_signed(&self.ephemeral_signing_key, impl_hash) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        last_error = e.to_string();
+                        continue;
+                    }
+                };
 
             // Pre-insertion deduplication: if an existing stage is semantically
             // near-identical (>= 0.92 cosine on description), reuse it instead.
             // Exception: if the existing stage has no signature, replace it with the
             // newly signed version so that signature verification passes.
-            if let Ok(Some((existing_id, similarity))) =
-                self.index.check_duplicate_before_insert(&spec.description, 0.92)
+            if let Ok(Some((existing_id, similarity))) = self
+                .index
+                .check_duplicate_before_insert(&spec.description, 0.92)
             {
                 let existing_is_signed = store
                     .get(&existing_id)
@@ -400,7 +408,10 @@ impl<'a> CompositionAgent<'a> {
                         store
                             .upsert(stage)
                             .map_err(|e| AgentError::SynthesisFailed(e.to_string()))?;
-                        eprintln!("Synthesis: replaced unsigned stage {} with signed version.", id.0);
+                        eprintln!(
+                            "Synthesis: replaced unsigned stage {} with signed version.",
+                            id.0
+                        );
                     }
                     (id, false)
                 }
@@ -694,7 +705,12 @@ mod tests {
         );
 
         let llm = SequenceMockLlmProvider::new(
-            vec![synthesis_request, synthesis_response, effect_inference_response, composition],
+            vec![
+                synthesis_request,
+                synthesis_response,
+                effect_inference_response,
+                composition,
+            ],
             "no more responses".to_string(),
         );
 
@@ -898,7 +914,12 @@ mod tests {
         // Second compose with identical synthesis response — should not fail.
         {
             let llm = SequenceMockLlmProvider::new(
-                vec![synthesis_request, codegen, effect_inference_response, graph_json],
+                vec![
+                    synthesis_request,
+                    codegen,
+                    effect_inference_response,
+                    graph_json,
+                ],
                 String::new(),
             );
             let mut agent = CompositionAgent::new(&mut index, &llm, LlmConfig::default(), 3);

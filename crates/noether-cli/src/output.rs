@@ -115,8 +115,14 @@ pub fn build_command_tree() -> CommandTree {
     )
     .idempotent(false)
     .with_examples(vec![
-        ("Preview duplicates without changes", "noether store retro --dry-run"),
-        ("Apply suggested deprecations", "noether store retro --apply"),
+        (
+            "Preview duplicates without changes",
+            "noether store retro --dry-run",
+        ),
+        (
+            "Apply suggested deprecations",
+            "noether store retro --apply",
+        ),
     ]);
     let store_migrate = CommandInfo::new(
         "migrate-effects",
@@ -130,7 +136,10 @@ pub fn build_command_tree() -> CommandTree {
     )
     .idempotent(false)
     .with_examples(vec![
-        ("Preview what would be inferred", "noether store migrate-effects --dry-run"),
+        (
+            "Preview what would be inferred",
+            "noether store migrate-effects --dry-run",
+        ),
         ("Apply inferred effects", "noether store migrate-effects"),
     ]);
     let mut store_cmd = CommandInfo::new("store", "Store management commands");
