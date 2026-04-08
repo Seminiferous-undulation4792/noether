@@ -5,7 +5,7 @@
 //! 2. `RuntimeExecutor`— LLM + store-aware stdlib stages
 //! 3. `InlineExecutor` — pure stdlib stages (function pointers)
 
-use super::inline::InlineExecutor;
+use super::inline::{InlineExecutor, InlineRegistry};
 use super::nix::NixExecutor;
 use super::runtime::RuntimeExecutor;
 use super::{ExecutionError, StageExecutor};
@@ -21,9 +21,19 @@ pub struct CompositeExecutor {
 }
 
 impl CompositeExecutor {
-    /// Build from a store. `NixExecutor` is included only when `nix` is available.
+    /// Build from a store using only the built-in stdlib implementations.
+    /// `NixExecutor` is included only when `nix` is available in `PATH`.
     pub fn from_store(store: &dyn StageStore) -> Self {
-        let inline = InlineExecutor::from_store(store);
+        Self::from_store_with_registry(store, InlineRegistry::new())
+    }
+
+    /// Build from a store, augmenting the stdlib with additional inline
+    /// stage implementations from `registry`.
+    ///
+    /// Use this when your project needs Pure Rust stage implementations
+    /// without modifying `noether-core`.  See [`InlineRegistry`] for usage.
+    pub fn from_store_with_registry(store: &dyn StageStore, registry: InlineRegistry) -> Self {
+        let inline = InlineExecutor::from_store_with_registry(store, registry);
         let nix = NixExecutor::from_store(store);
         let runtime = RuntimeExecutor::from_store(store);
 
@@ -55,9 +65,6 @@ impl CompositeExecutor {
         mut self,
         provider: Box<dyn crate::index::embedding::EmbeddingProvider>,
     ) -> Self {
-        // Rebuild runtime with embedding (pre-computes embeddings for all cached stages).
-        // We need to apply `with_embedding` to the existing runtime; since RuntimeExecutor
-        // doesn't expose a `set_embedding` method we re-build via destructure.
         self.runtime = self.runtime.with_embedding(provider);
         self
     }
@@ -88,7 +95,7 @@ impl StageExecutor for CompositeExecutor {
         if self.runtime.has_implementation(stage_id) {
             return self.runtime.execute(stage_id, input);
         }
-        // 3. Pure stdlib stages → InlineExecutor
+        // 3. Pure stdlib + registered extra stages → InlineExecutor
         self.inline.execute(stage_id, input)
     }
 }

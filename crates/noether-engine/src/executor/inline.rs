@@ -5,6 +5,77 @@ use noether_store::StageStore;
 use serde_json::Value;
 use std::collections::HashMap;
 
+// ── InlineRegistry ────────────────────────────────────────────────────────────
+
+/// A pluggable registry of inline (Rust function pointer) stage implementations.
+///
+/// The Noether stdlib stages are registered automatically via the internal
+/// `find_implementation` match table.  Downstream crates that want to ship their
+/// own Pure Rust stages — without modifying `noether-core` — can build an
+/// `InlineRegistry`, call `register` for each of their stages, and pass it to
+/// [`InlineExecutor::from_store_with_registry`] or
+/// [`crate::executor::composite::CompositeExecutor::from_store_with_registry`].
+///
+/// ## Example
+///
+/// ```rust,ignore
+/// use noether_engine::executor::InlineRegistry;
+///
+/// let mut registry = InlineRegistry::new();
+/// registry.register("Evaluate a sprint DAG from events", my_dag_eval_fn);
+/// registry.register("Check agent health from heartbeat", my_health_check_fn);
+///
+/// let executor = CompositeExecutor::from_store_with_registry(&store, registry);
+/// ```
+#[derive(Default)]
+pub struct InlineRegistry {
+    extra_fns: HashMap<String, StageFn>,
+}
+
+impl InlineRegistry {
+    /// Create an empty registry.  The Noether stdlib is always available
+    /// regardless — it is built into the binary via the static match table.
+    pub fn new() -> Self {
+        Self {
+            extra_fns: HashMap::new(),
+        }
+    }
+
+    /// Register a stage implementation keyed by its **description string**
+    /// (the same string used in the stage spec and `noether stage search`).
+    ///
+    /// If the same description is registered twice the later call wins.
+    /// Returns `&mut Self` for chaining.
+    pub fn register(&mut self, description: impl Into<String>, f: StageFn) -> &mut Self {
+        self.extra_fns.insert(description.into(), f);
+        self
+    }
+
+    /// Look up a stage fn by description.
+    ///
+    /// Checks the registered extras **first**, then falls back to the stdlib
+    /// match table.  This means registered stages can shadow stdlib stages if
+    /// needed (e.g. to override a stdlib stage with a faster implementation).
+    pub(crate) fn find(&self, description: &str) -> Option<StageFn> {
+        if let Some(&f) = self.extra_fns.get(description) {
+            return Some(f);
+        }
+        find_implementation(description)
+    }
+
+    /// Returns the number of explicitly-registered (non-stdlib) stages.
+    pub fn len(&self) -> usize {
+        self.extra_fns.len()
+    }
+
+    /// Returns `true` if no extra stages have been registered.
+    pub fn is_empty(&self) -> bool {
+        self.extra_fns.is_empty()
+    }
+}
+
+// ── InlineExecutor ────────────────────────────────────────────────────────────
+
 /// Real executor that runs Pure stage implementations inline.
 /// Handles higher-order stages (map, filter, reduce) by recursively calling itself.
 /// Falls back to returning the first example output for unimplemented stages.
@@ -16,15 +87,28 @@ pub struct InlineExecutor {
 }
 
 impl InlineExecutor {
-    /// Build from a store: registers real implementations for known stages,
-    /// and caches first-example outputs as fallbacks for unimplemented stages.
+    /// Build from a store using only the built-in stdlib implementations.
+    ///
+    /// This is the standard constructor.  Use [`Self::from_store_with_registry`]
+    /// if you need to inject additional inline stage implementations.
     pub fn from_store(store: &(impl StageStore + ?Sized)) -> Self {
+        Self::from_store_with_registry(store, InlineRegistry::new())
+    }
+
+    /// Build from a store, augmenting the stdlib with the provided registry.
+    ///
+    /// Registered stages take priority over stdlib stages with the same
+    /// description string, allowing selective overrides.
+    pub fn from_store_with_registry(
+        store: &(impl StageStore + ?Sized),
+        registry: InlineRegistry,
+    ) -> Self {
         let mut implementations = HashMap::new();
         let mut fallback_outputs = HashMap::new();
         let mut descriptions = HashMap::new();
 
         for stage in store.list(None) {
-            if let Some(func) = find_implementation(&stage.description) {
+            if let Some(func) = registry.find(&stage.description) {
                 implementations.insert(stage.id.0.clone(), func);
             }
             if let Some(example) = stage.examples.first() {
@@ -544,5 +628,117 @@ mod tests {
             count >= 22,
             "Expected at least 22 real implementations, got {count}"
         );
+    }
+
+    // ── InlineRegistry tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn registry_register_and_find() {
+        fn my_fn(_: &Value) -> Result<Value, ExecutionError> {
+            Ok(json!("from_registry"))
+        }
+
+        let mut reg = InlineRegistry::new();
+        assert!(reg.is_empty());
+        reg.register("my custom stage", my_fn);
+        assert_eq!(reg.len(), 1);
+
+        let found = reg.find("my custom stage");
+        assert!(found.is_some());
+        let result = found.unwrap()(&json!(null)).unwrap();
+        assert_eq!(result, json!("from_registry"));
+    }
+
+    #[test]
+    fn registry_falls_back_to_stdlib() {
+        let reg = InlineRegistry::new();
+        // Should find a stdlib stage without explicit registration.
+        let found = reg.find("Convert any value to its text representation");
+        assert!(found.is_some(), "stdlib fallback should work");
+    }
+
+    #[test]
+    fn registry_extra_overrides_stdlib() {
+        fn override_fn(_: &Value) -> Result<Value, ExecutionError> {
+            Ok(json!("overridden"))
+        }
+
+        let mut reg = InlineRegistry::new();
+        reg.register("Convert any value to its text representation", override_fn);
+
+        let result = reg
+            .find("Convert any value to its text representation")
+            .unwrap()(&json!(42))
+        .unwrap();
+        assert_eq!(
+            result,
+            json!("overridden"),
+            "registered fn should shadow stdlib"
+        );
+    }
+
+    #[test]
+    fn from_store_with_registry_injects_extra_stage() {
+        fn always_42(_: &Value) -> Result<Value, ExecutionError> {
+            Ok(json!(42))
+        }
+
+        let mut store = init_store();
+        use noether_core::stage::StageBuilder;
+        use noether_core::stdlib::stdlib_signing_key;
+        use noether_core::types::NType;
+        let key = stdlib_signing_key();
+        let extra = StageBuilder::new("always_42")
+            .input(NType::Null)
+            .output(NType::Number)
+            .pure()
+            .description("Return 42 always")
+            .example(json!(null), json!(42.0))
+            .example(json!(null), json!(42.0))
+            .example(json!(null), json!(42.0))
+            .example(json!(null), json!(42.0))
+            .example(json!(null), json!(42.0))
+            .build_stdlib(&key)
+            .unwrap();
+        let extra_id = extra.id.clone();
+        store.put(extra).unwrap();
+
+        let mut registry = InlineRegistry::new();
+        registry.register("Return 42 always", always_42);
+
+        let executor = InlineExecutor::from_store_with_registry(&store, registry);
+        assert!(executor.has_implementation(&extra_id));
+        let result = executor.execute(&extra_id, &json!(null)).unwrap();
+        assert_eq!(result, json!(42));
+    }
+
+    #[test]
+    fn from_store_without_registry_does_not_see_extra() {
+        let mut store = init_store();
+        use noether_core::stage::StageBuilder;
+        use noether_core::stdlib::stdlib_signing_key;
+        use noether_core::types::NType;
+        let key = stdlib_signing_key();
+        let extra = StageBuilder::new("no_impl")
+            .input(NType::Null)
+            .output(NType::Null)
+            .pure()
+            .description("A stage with no registered implementation")
+            .example(json!(null), json!(null))
+            .example(json!(null), json!(null))
+            .example(json!(null), json!(null))
+            .example(json!(null), json!(null))
+            .example(json!(null), json!(null))
+            .build_stdlib(&key)
+            .unwrap();
+        let extra_id = extra.id.clone();
+        store.put(extra).unwrap();
+
+        let executor = InlineExecutor::from_store(&store);
+        // No fn registered → falls back to example output, not a real impl.
+        assert!(!executor.has_implementation(&extra_id));
+        // But example fallback still works.
+        let result = executor.execute(&extra_id, &json!(null)).unwrap();
+        assert_eq!(result, json!(null));
     }
 }

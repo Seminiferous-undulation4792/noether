@@ -14,6 +14,8 @@ pub mod pure_cache;
 pub mod runner;
 pub mod stages;
 
+pub use inline::InlineRegistry;
+
 use noether_core::stage::StageId;
 
 #[derive(Debug, thiserror::Error)]

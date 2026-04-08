@@ -22,3 +22,6 @@ pub mod trace;
 
 pub use noether_core as core;
 pub use noether_store as store;
+
+// Convenience re-export so downstream crates don't need to reach into executor submodules.
+pub use executor::InlineRegistry;
