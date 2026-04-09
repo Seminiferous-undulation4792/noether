@@ -26,7 +26,7 @@ cargo test -p noether-core reflexivity
 cargo run --bin noether -- version
 cargo run --bin noether -- introspect
 cargo run --bin noether -- stage search "query"  # semantic search across all stages
-cargo run --bin noether -- stage list       # list all 50 stdlib stages
+cargo run --bin noether -- stage list       # list all 80 stdlib stages
 cargo run --bin noether -- stage get <hash> # get stage by ID
 cargo run --bin noether -- store stats      # store statistics
 cargo run --bin noether -- run graph.json            # execute composition graph
@@ -65,10 +65,10 @@ crates/
 - `stage::StageSignature` — identity-determining fields (input, output, effects, implementation_hash)
 - `stage::StageBuilder` — fluent API for constructing stages with `build_stdlib()` and `build_unsigned()`
 - `stage::validation` — `infer_type()` / `infer_type_with_hint()` for JSON→NType inference, `validate_stage()` for example validation
-- `stdlib::load_stdlib()` — loads all 50 stdlib stages (deterministic IDs, Ed25519-signed)
+- `stdlib::load_stdlib()` — loads all 80 stdlib stages (deterministic IDs, Ed25519-signed)
 
-### stdlib categories (65 stages)
-Scalar (5), Collections (14), Control (6), I/O (10), LLM primitives (4), Data (7), Noether internal (6), Text processing (13)
+### stdlib categories (80 stages)
+Scalar (5), Collections (14), Control (6), I/O (10), LLM primitives (4), Data (7), Noether internal (6), Text processing (13), Process (4), [additional stages across categories]
 
 ### noether-store modules
 - `StageStore` trait — put/get/contains/list/update_lifecycle/stats

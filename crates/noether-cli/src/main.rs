@@ -144,6 +144,11 @@ enum StageCommands {
         /// The stage hash (or prefix)
         hash: String,
     },
+    /// Promote a Draft stage to Active
+    Activate {
+        /// The stage hash (or prefix)
+        hash: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -415,6 +420,9 @@ fn main() {
                     commands::stage::cmd_list(store.as_ref(), tag.as_deref())
                 }
                 StageCommands::Get { hash } => commands::stage::cmd_get(store.as_ref(), &hash),
+                StageCommands::Activate { hash } => {
+                    commands::stage::cmd_activate(store.as_mut(), &hash)
+                }
             }
         }
         Commands::Store { command } => {
