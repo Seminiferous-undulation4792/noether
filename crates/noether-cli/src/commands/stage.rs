@@ -343,8 +343,43 @@ pub fn cmd_add(
         }
     }
 
+    // ── Canonical dedup: auto-deprecate previous version ────────────────
+    // If a stage with the same canonical_id exists and is Active, deprecate
+    // it with the new stage as successor. This ensures only one active
+    // version per concept (name + types + effects).
+    let mut deprecated_id: Option<String> = None;
+    if let Some(ref canonical) = stage.canonical_id {
+        for existing in store.list(Some(&StageLifecycle::Active)) {
+            if existing.canonical_id.as_ref() == Some(canonical) && existing.id != stage.id {
+                deprecated_id = Some(existing.id.0.clone());
+                // Don't deprecate yet — wait until the new stage is inserted successfully.
+                break;
+            }
+        }
+    }
+
     match store.put(stage) {
-        Ok(id) => println!("{}", acli_ok(json!({"id": id.0}))),
+        Ok(id) => {
+            // Now deprecate the old version, pointing to the new one.
+            if let Some(ref old_id) = deprecated_id {
+                let old_stage_id = StageId(old_id.clone());
+                let new_lc = StageLifecycle::Deprecated {
+                    successor_id: id.clone(),
+                };
+                if store.update_lifecycle(&old_stage_id, new_lc).is_ok() {
+                    eprintln!(
+                        "Auto-deprecated previous version {} → successor {}",
+                        &old_id[..8.min(old_id.len())],
+                        &id.0[..8.min(id.0.len())]
+                    );
+                }
+            }
+            let mut result = json!({"id": id.0});
+            if let Some(old) = deprecated_id {
+                result["supersedes"] = json!(old);
+            }
+            println!("{}", acli_ok(result));
+        }
         Err(StoreError::AlreadyExists(id)) => {
             println!("{}", acli_ok(json!({"id": id.0, "note": "already exists"})));
         }

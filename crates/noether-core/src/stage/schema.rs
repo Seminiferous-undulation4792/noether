@@ -8,6 +8,14 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StageId(pub String);
 
+/// Canonical identity: hex-encoded SHA-256 of (name + input + output + effects).
+///
+/// Two stages with the same canonical hash represent the same *concept* —
+/// they have the same name, types, and effects, but may differ in implementation.
+/// Only one active version per canonical hash should exist in the store.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanonicalId(pub String);
+
 /// The identity-determining fields of a stage.
 ///
 /// Only these fields are included in the content hash that produces
@@ -46,6 +54,10 @@ pub enum StageLifecycle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stage {
     pub id: StageId,
+    /// Canonical identity — same concept (name + types + effects), regardless of
+    /// implementation. Used to detect re-registrations and auto-deprecate old versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_id: Option<CanonicalId>,
     pub signature: StageSignature,
     pub capabilities: BTreeSet<Capability>,
     pub cost: CostEstimate,
@@ -94,6 +106,7 @@ mod tests {
     fn stage_serde_round_trip() {
         let stage = Stage {
             id: StageId("deadbeef".into()),
+            canonical_id: Some(CanonicalId("canonical123".into())),
             signature: sample_signature(),
             capabilities: BTreeSet::from([Capability::Network]),
             cost: CostEstimate {

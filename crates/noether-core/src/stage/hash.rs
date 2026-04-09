@@ -1,4 +1,6 @@
-use crate::stage::schema::{StageId, StageSignature};
+use crate::stage::schema::{CanonicalId, StageId, StageSignature};
+use crate::effects::EffectSet;
+use crate::types::NType;
 use sha2::{Digest, Sha256};
 
 /// Produce the canonical JSON bytes for a StageSignature.
@@ -19,6 +21,28 @@ pub fn compute_stage_id(sig: &StageSignature) -> Result<StageId, serde_json::Err
     let bytes = canonical_json(sig)?;
     let hash = Sha256::digest(&bytes);
     Ok(StageId(hex::encode(hash)))
+}
+
+/// Compute the canonical identity from name + input + output + effects.
+///
+/// This hash captures *what* a stage does (its interface contract) without
+/// the implementation. Two stages with the same canonical ID are considered
+/// versions of the same concept — only one should be Active at a time.
+pub fn compute_canonical_id(
+    name: &str,
+    input: &NType,
+    output: &NType,
+    effects: &EffectSet,
+) -> Result<CanonicalId, serde_json::Error> {
+    let canonical = serde_json::json!({
+        "name": name,
+        "input": input,
+        "output": output,
+        "effects": effects,
+    });
+    let bytes = serde_json::to_vec(&canonical)?;
+    let hash = Sha256::digest(&bytes);
+    Ok(CanonicalId(hex::encode(hash)))
 }
 
 #[cfg(test)]
@@ -68,5 +92,29 @@ mod tests {
         let deserialized: StageSignature = serde_json::from_slice(&json).unwrap();
         let json2 = canonical_json(&deserialized).unwrap();
         assert_eq!(json, json2);
+    }
+
+    #[test]
+    fn canonical_id_ignores_implementation() {
+        let effects = EffectSet::pure();
+        let id1 = compute_canonical_id("my_stage", &NType::Text, &NType::Number, &effects).unwrap();
+        let id2 = compute_canonical_id("my_stage", &NType::Text, &NType::Number, &effects).unwrap();
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn canonical_id_differs_by_name() {
+        let effects = EffectSet::pure();
+        let id1 = compute_canonical_id("stage_a", &NType::Text, &NType::Number, &effects).unwrap();
+        let id2 = compute_canonical_id("stage_b", &NType::Text, &NType::Number, &effects).unwrap();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn canonical_id_differs_by_type() {
+        let effects = EffectSet::pure();
+        let id1 = compute_canonical_id("my_stage", &NType::Text, &NType::Number, &effects).unwrap();
+        let id2 = compute_canonical_id("my_stage", &NType::Text, &NType::Text, &effects).unwrap();
+        assert_ne!(id1, id2);
     }
 }

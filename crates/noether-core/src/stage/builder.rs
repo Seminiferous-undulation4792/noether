@@ -1,6 +1,6 @@
 use crate::capability::Capability;
 use crate::effects::EffectSet;
-use crate::stage::hash::compute_stage_id;
+use crate::stage::hash::{compute_canonical_id, compute_stage_id};
 use crate::stage::schema::{CostEstimate, Example, Stage, StageLifecycle, StageSignature};
 use crate::stage::signing::sign_stage_id;
 use crate::types::NType;
@@ -162,10 +162,13 @@ impl StageBuilder {
             hex::encode(Sha256::digest(data.as_bytes()))
         };
 
+        let effects = self.effects.unwrap_or_default();
+        let canonical_id = compute_canonical_id(name, &input, &output, &effects)?;
+
         let signature = StageSignature {
             input,
             output,
-            effects: self.effects.unwrap_or_default(),
+            effects,
             implementation_hash: impl_hash,
         };
 
@@ -175,6 +178,7 @@ impl StageBuilder {
 
         Ok(Stage {
             id,
+            canonical_id: Some(canonical_id),
             signature,
             capabilities: self.capabilities,
             cost: self.cost,
@@ -200,6 +204,7 @@ impl StageBuilder {
         signing_key: &SigningKey,
         implementation_hash: String,
     ) -> Result<Stage, StageBuilderError> {
+        let name = self.name.clone().unwrap_or_default();
         let input = self
             .input
             .ok_or_else(|| StageBuilderError::MissingField("input".into()))?;
@@ -210,10 +215,13 @@ impl StageBuilder {
             .description
             .ok_or_else(|| StageBuilderError::MissingField("description".into()))?;
 
+        let effects = self.effects.unwrap_or_default();
+        let canonical_id = compute_canonical_id(&name, &input, &output, &effects)?;
+
         let signature = StageSignature {
             input,
             output,
-            effects: self.effects.unwrap_or_default(),
+            effects,
             implementation_hash,
         };
 
@@ -223,6 +231,7 @@ impl StageBuilder {
 
         Ok(Stage {
             id,
+            canonical_id: Some(canonical_id),
             signature,
             capabilities: self.capabilities,
             cost: self.cost,
@@ -241,6 +250,7 @@ impl StageBuilder {
 
     /// Build an unsigned stage for user authoring. Requires an implementation_hash.
     pub fn build_unsigned(self, implementation_hash: String) -> Result<Stage, StageBuilderError> {
+        let name = self.name.clone().unwrap_or_default();
         let input = self
             .input
             .ok_or_else(|| StageBuilderError::MissingField("input".into()))?;
@@ -251,10 +261,13 @@ impl StageBuilder {
             .description
             .ok_or_else(|| StageBuilderError::MissingField("description".into()))?;
 
+        let effects = self.effects.unwrap_or_default();
+        let canonical_id = compute_canonical_id(&name, &input, &output, &effects)?;
+
         let signature = StageSignature {
             input,
             output,
-            effects: self.effects.unwrap_or_default(),
+            effects,
             implementation_hash,
         };
 
@@ -262,6 +275,7 @@ impl StageBuilder {
 
         Ok(Stage {
             id,
+            canonical_id: Some(canonical_id),
             signature,
             capabilities: self.capabilities,
             cost: self.cost,
