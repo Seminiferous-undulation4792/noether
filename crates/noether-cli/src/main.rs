@@ -115,6 +115,11 @@ enum Commands {
         /// Reject compositions whose estimated cost exceeds this value (in cents).
         #[arg(long)]
         budget_cents: Option<u64>,
+        /// Show the composition reasoning: search candidates, LLM prompt, and
+        /// each attempt's response. Useful for debugging and understanding
+        /// how noether compose selects stages.
+        #[arg(long, short)]
+        verbose: bool,
     },
 }
 
@@ -515,7 +520,12 @@ fn main() {
             force,
             allow_capabilities,
             budget_cents,
+            verbose,
         } => {
+            // --verbose sets NOETHER_VERBOSE which the composition agent reads
+            if verbose {
+                std::env::set_var("NOETHER_VERBOSE", "1");
+            }
             let mut store = build_store(registry);
             let mut index = build_index(store.as_ref());
             let (llm, llm_name) = providers::build_llm_provider();

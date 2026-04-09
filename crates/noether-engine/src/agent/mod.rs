@@ -100,6 +100,7 @@ impl<'a> CompositionAgent<'a> {
         problem: &str,
         store: &mut dyn StageStore,
     ) -> Result<ComposeResult, AgentError> {
+        let verbose = std::env::var("NOETHER_VERBOSE").is_ok();
         let mut synthesized: Vec<SynthesisResult> = Vec::new();
         let mut synthesis_done = false;
 
@@ -113,6 +114,25 @@ impl<'a> CompositionAgent<'a> {
                     .search(problem, 20)
                     .map_err(|e| AgentError::Search(e.to_string()))?;
 
+                if verbose {
+                    eprintln!("\n[compose] Semantic search: \"{}\"", problem);
+                    eprintln!("[compose] Found {} candidates:", search_results.len());
+                    for (i, r) in search_results.iter().enumerate().take(10) {
+                        if let Ok(Some(s)) = store.get(&r.stage_id) {
+                            eprintln!(
+                                "  {:>2}. {:.3}  {}  {}",
+                                i + 1,
+                                r.score,
+                                &s.id.0[..8],
+                                &s.description[..s.description.len().min(60)]
+                            );
+                        }
+                    }
+                    if search_results.len() > 10 {
+                        eprintln!("  ... and {} more", search_results.len() - 10);
+                    }
+                }
+
                 let candidates: Vec<_> = search_results
                     .iter()
                     .filter_map(|r| {
@@ -125,6 +145,15 @@ impl<'a> CompositionAgent<'a> {
                     .collect();
 
                 let sp = build_system_prompt(&candidates);
+
+                if verbose {
+                    eprintln!(
+                        "\n[compose] System prompt: {} chars, {} candidate stages",
+                        sp.len(),
+                        candidates.len()
+                    );
+                }
+
                 let um = match synthesized.last() {
                     Some(syn) => format!(
                         "{problem}\n\nIMPORTANT: Stage `{id}` has been synthesized and added to \
@@ -145,7 +174,27 @@ impl<'a> CompositionAgent<'a> {
             let mut did_synthesize_this_round = false;
 
             for attempt in 1..=self.max_retries {
+                if verbose {
+                    eprintln!(
+                        "\n[compose] LLM call (attempt {}/{}, model: {})",
+                        attempt, self.max_retries, self.llm_config.model
+                    );
+                }
                 let response = self.llm.complete(&messages, &self.llm_config)?;
+
+                if verbose {
+                    // Show a condensed version of the response
+                    let trimmed = response.trim();
+                    if trimmed.len() <= 300 {
+                        eprintln!("[compose] LLM response:\n{trimmed}");
+                    } else {
+                        eprintln!(
+                            "[compose] LLM response ({} chars):\n{}...",
+                            trimmed.len(),
+                            &trimmed[..300]
+                        );
+                    }
+                }
 
                 // Optional raw-response debug output.
                 if std::env::var("NOETHER_DEBUG").is_ok() {
@@ -240,6 +289,9 @@ impl<'a> CompositionAgent<'a> {
 
                 match check_graph(&graph.root, store) {
                     Ok(_) => {
+                        if verbose {
+                            eprintln!("[compose] ✓ Type check passed on attempt {attempt}");
+                        }
                         return Ok(ComposeResult {
                             graph,
                             attempts: attempt,
@@ -253,6 +305,12 @@ impl<'a> CompositionAgent<'a> {
                             .collect::<Vec<_>>()
                             .join("; ");
                         last_error_type = LastErrorType::TypeCheck;
+                        if verbose {
+                            eprintln!(
+                                "[compose] ✗ Type error on attempt {attempt}: {}",
+                                &last_errors[..last_errors.len().min(150)]
+                            );
+                        }
                         if attempt < self.max_retries {
                             messages.push(Message::assistant(&response));
                             messages.push(Message::user(format!(
