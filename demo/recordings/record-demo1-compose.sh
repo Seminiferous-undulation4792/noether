@@ -83,14 +83,12 @@ if d['ok']:
     print(f'    Time:   {trace[\"duration_ms\"]}ms')
     print(f'    Stages: {len(trace[\"stages\"])} executed')
     print(f'    Saved:  /tmp/sales_report.html')
-    # Show summary from the HTML
-    import re
-    amounts = re.findall(r'\\$[\d,]+', html)
-    if amounts:
-        print(f'')
-        print(f'  Report contains:')
-        for a in amounts[:4]:
-            print(f'    {a}')
+    # Show key numbers from the HTML
+    print(f'')
+    print(f'  Report highlights:')
+    if 'Total Revenue' in html:
+        print(f'    Summary cards + data table + bar charts')
+    print(f'    Open: file:///tmp/sales_report.html')
 else:
     print(f'  Error: {d[\"error\"][\"message\"][:80]}')
 "

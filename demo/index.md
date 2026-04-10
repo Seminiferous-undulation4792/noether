@@ -183,7 +183,7 @@ $ noether run pipeline.json \
 
 3 students, counted in 0ms. Every stage traced. Reproducible — same graph + same input = same output, always.
 
-[![Demo 1: CSV Revenue from File](https://asciinema.org/a/lgc5K2pGmnetQEAN.svg)](https://asciinema.org/a/lgc5K2pGmnetQEAN)
+[![Demo 1: CSV Revenue from File](https://asciinema.org/a/a7mqowwnUITJAWrs.svg)](https://asciinema.org/a/a7mqowwnUITJAWrs)
 
 ---
 
