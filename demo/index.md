@@ -8,7 +8,7 @@ Noether is different. Instead of generating code, it **composes pre-built, typed
 
 ## Demo 1: What a composition graph looks like
 
-A Noether pipeline is a JSON file called a **composition graph**. Here's one that parses sales CSV data, groups by region, sums revenue, and serializes the result:
+A Noether pipeline is a JSON file called a **composition graph**. Here's one that reads a CSV file, groups sales by region, sums the revenue, and serializes the result:
 
 ```json
 {
@@ -19,8 +19,8 @@ A Noether pipeline is a JSON file called a **composition graph**. Here's one tha
     "stages": [
       {
         "op": "Stage",
-        "id": "a274d6de...",
-        "_comment": "csv_group_revenue: Record{text} → Any (parse + group + sum)"
+        "id": "c8e4f75c...",
+        "_comment": "csv_file_group_revenue: Record{path} → Any (read file + parse + group + sum)"
       },
       {
         "op": "Stage",
@@ -32,19 +32,33 @@ A Noether pipeline is a JSON file called a **composition graph**. Here's one tha
 }
 ```
 
+The input is a file path — Noether reads the file, parses the CSV, groups by region, and sums revenue:
+
+```
+$ cat /tmp/sales.csv
+name,revenue,region
+Acme Corp,450000,US
+GlobalTech,280000,EU
+DataFlow Inc,520000,US
+NordStar,190000,EU
+Pacific Systems,340000,APAC
+CloudBase,410000,US
+SmartGrid,175000,EU
+RapidScale,295000,APAC
+```
+
 ```bash
-$ noether run revenue-by-region.json \
-    --input '{"text": "name,revenue,region\nAcme,450000,US\nGlobalTech,280000,EU\nDataFlow,520000,US\nNordStar,190000,EU\nPacific,340000,APAC"}'
+$ noether run revenue-by-region.json --input '{"path": "/tmp/sales.csv"}'
 
 {
   "ok": true,
   "data": {
-    "output": "{\"APAC\":340000,\"EU\":470000,\"US\":970000}"
+    "output": "{\"US\":1380000,\"EU\":645000,\"APAC\":635000}"
   }
 }
 ```
 
-US: $970K. EU: $470K. APAC: $340K. Type-checked and executed in milliseconds.
+US: $1.38M. EU: $645K. APAC: $635K. Read from disk, parsed, grouped, and serialized.
 
 Here's a simpler example — counting CSV rows:
 
@@ -118,7 +132,7 @@ $ noether run pipeline.json \
 
 3 students, counted in 0ms. Every stage traced. Reproducible — same graph + same input = same output, always.
 
-[![Demo 1: CSV Revenue Analysis](https://asciinema.org/a/EbKf3SkDHpQ06kdU.svg)](https://asciinema.org/a/EbKf3SkDHpQ06kdU)
+[![Demo 1: CSV Revenue from File](https://asciinema.org/a/LcOqXNriDrSd76em.svg)](https://asciinema.org/a/LcOqXNriDrSd76em)
 
 ---
 
