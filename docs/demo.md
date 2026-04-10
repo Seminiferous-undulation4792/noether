@@ -60,6 +60,57 @@ $ noether run revenue-by-region.json --input '{"path": "/tmp/sales.csv"}'
 
 US: $1.38M. EU: $645K. APAC: $635K. Read from disk, parsed, grouped, and serialized.
 
+**Going further — parallel aggregations into an HTML report:**
+
+The same CSV file, two aggregations running in parallel, merged into a visual report:
+
+```json
+{
+  "root": {
+    "op": "Sequential",
+    "stages": [
+      {
+        "op": "Parallel",
+        "branches": {
+          "revenue_by_region": { "op": "Stage", "id": "c8e4f75c...",
+            "_comment": "csv_group_revenue: parse CSV + group + sum revenue" },
+          "deals_by_region":   { "op": "Stage", "id": "8e5cdc6f...",
+            "_comment": "csv_group_deals: parse CSV + count deals per region" },
+          "title":             { "op": "Const", "value": "Q4 2025 Sales Report" }
+        }
+      },
+      { "op": "Stage", "id": "ce4a3e2c...",
+        "_comment": "html_sales_report: generates HTML with summary cards + bar charts" }
+    ]
+  }
+}
+```
+
+```bash
+$ noether run sales-report.json --input '{"path": "/tmp/sales.csv"}'
+# → report.html (1285 chars)
+```
+
+The output is a self-contained HTML page:
+
+```
+┌─────────────────────────────────────────────────┐
+│  Q4 2025 Sales Report                           │
+│                                                 │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐        │
+│  │ Revenue  │ │ Deals    │ │ Regions  │        │
+│  │$2,660,000│ │    8     │ │    3     │        │
+│  └──────────┘ └──────────┘ └──────────┘        │
+│                                                 │
+│  Region  Revenue      Deals  Share              │
+│  APAC    $635,000     2      ████████           │
+│  EU      $645,000     3      █████████          │
+│  US      $1,380,000   3      ██████████████████ │
+└─────────────────────────────────────────────────┘
+```
+
+Two parallel aggregations + a visual report — all from composing pre-built stages, no pandas, no matplotlib, no code.
+
 Here's a simpler example — counting CSV rows:
 
 ```json
