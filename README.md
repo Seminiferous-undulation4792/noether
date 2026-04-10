@@ -12,7 +12,7 @@ noether compose "parse CSV data and count the number of rows"
 # → { "ok": true, "data": { "output": 3.0 } }
 ```
 
-> **[See the demos](https://github.com/alpibrusl/noether-cloud/blob/main/demo/index.md)** — type safety, parallel execution, stage reuse, and the full agent flow.
+> **[See the demos →](./demo/index.md)** — type safety, parallel execution, stage reuse, and the full agent flow.
 
 ---
 
