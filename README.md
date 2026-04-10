@@ -5,11 +5,14 @@
 Named after Emmy Noether: type signature symmetry guarantees composition correctness.
 
 ```bash
-cargo install noether-cli
-noether compose "search GitHub and HN for Rust async runtimes, format as HTML report"
-noether build graph.json --output my-report
-./my-report --serve :8080   # browser dashboard, live data
+cargo build --release -p noether-cli
+export PATH="$PWD/target/release:$PATH"
+
+noether compose "parse CSV data and count the number of rows"
+# → { "ok": true, "data": { "output": 3.0 } }
 ```
+
+> **[See the demos](https://github.com/alpibrusl/noether-cloud/blob/main/demo/index.md)** — type safety, parallel execution, stage reuse, and the full agent flow.
 
 ---
 
@@ -43,7 +46,7 @@ Noether is **not** a workflow orchestrator, AI agent framework, or pipeline runn
 │  Type checker · DAG planner · Executor · Trace store     │
 ├─────────────────────────────────────────────────────────┤
 │  L2 — Stage Store                                        │
-│  Immutable SHA-256 registry · Lifecycle · 76-stage stdlib│
+│  Immutable SHA-256 registry · Lifecycle · 80+ stdlib     │
 ├─────────────────────────────────────────────────────────┤
 │  L1 — Execution Layer                                    │
 │  Nix hermetic sandboxing · Python/JS/Bash runtimes       │
@@ -54,7 +57,7 @@ Noether is **not** a workflow orchestrator, AI agent framework, or pipeline runn
 
 | Crate | Purpose |
 |---|---|
-| `noether-core` | Type system (`NType`), effects, stage schema, stdlib (76 stages), Ed25519 signing |
+| `noether-core` | Type system (`NType`), effects, stage schema, stdlib (80+ stages), Ed25519 signing |
 | `noether-store` | `StageStore` trait, `MemoryStore`, `JsonFileStore`, lifecycle validation |
 | `noether-engine` | Lagrange graph format, type checker, planner, executor, semantic index, LLM agent |
 | `noether-cli` | ACLI-compliant CLI — `stage`, `store`, `run`, `build`, `compose`, `trace` |
@@ -68,9 +71,9 @@ Noether is **not** a workflow orchestrator, AI agent framework, or pipeline runn
 - Nix (optional, required for Python/JS stage execution)
 
 ```bash
-git clone https://github.com/your-org/noether
-cd noether
-cargo build --release
+git clone https://github.com/alpibrusl/noether solv-noether
+cd solv-noether
+cargo build --release -p noether-cli
 export PATH="$PWD/target/release:$PATH"
 noether version
 ```
@@ -78,7 +81,7 @@ noether version
 ### Run a composition
 
 ```bash
-# List all 76 stdlib stages
+# List all stdlib stages
 noether stage list
 
 # Search by capability
@@ -100,10 +103,14 @@ noether build graph.json --output ./my-app
 ### LLM-powered composition
 
 ```bash
-# Requires VERTEX_AI_TOKEN, VERTEX_AI_PROJECT, VERTEX_AI_LOCATION
-noether compose "fetch top GitHub repos for a query and return an HTML report"
-noether compose --dry-run "search HN and summarize results"
-noether compose --model gemini-2.0-flash "classify sentiment of a list of reviews"
+# Set one LLM provider:
+export VERTEX_AI_PROJECT=your-project VERTEX_AI_MODEL=gemini-2.5-flash
+# or: export OPENAI_API_KEY=sk-...
+# or: export ANTHROPIC_API_KEY=sk-ant-...
+
+noether compose "parse CSV data and count the number of rows"
+noether compose --dry-run "convert text to uppercase and get its length"
+noether compose --verbose "sort a list and take the top 3"  # show reasoning
 ```
 
 ---
@@ -213,7 +220,8 @@ Stages follow a lifecycle: `Draft → Active → Deprecated → Tombstone`
 noether store stats        # store statistics
 noether store health       # audit: signatures, missing examples, orphans
 noether store dedup        # find near-duplicate stages (cosine similarity)
-noether store dedup --apply  # tombstone confirmed duplicates
+noether store dedup --apply  # deprecate confirmed duplicates (with successor pointer)
+noether stage activate <id>  # promote Draft → Active
 ```
 
 ---
@@ -247,7 +255,7 @@ Or via the stdlib stages: `kv_get`, `kv_set`, `kv_delete`, `kv_exists`, `kv_list
 
 ---
 
-## Stdlib (76 stages)
+## Stdlib (80+ stages)
 
 | Category | Stages |
 |---|---|
@@ -288,7 +296,7 @@ noether compose "extract key entities from these documents" --input '...'
 | Phase | Status |
 |---|---|
 | 0 — Foundation (type system, hashing, stage schema) | ✅ Done |
-| 1 — Store + Stdlib (76 stages, test harness) | ✅ Done |
+| 1 — Store + Stdlib (80+ stages, test harness) | ✅ Done |
 | 2 — Composition Engine (DAG executor, traces) | ✅ Done |
 | 3 — Agent Interface (Composition Agent, semantic index) | ✅ Done |
 | 4 — Hardening (signatures, dedup, store health) | ✅ Done |
@@ -308,7 +316,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 Areas where contributions are especially welcome:
 - New stdlib stages (any domain)
 - Language runtimes beyond Python (JS, Ruby, Go)
-- LLM provider integrations beyond Vertex AI
+- LLM provider integrations (OpenAI, Anthropic, Mistral, Vertex AI supported; Ollama via OpenAI-compatible API)
 - Type system extensions (generic types, row polymorphism)
 
 ---
