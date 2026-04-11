@@ -392,6 +392,45 @@ $ noether compose --verbose "sort a list by score and take top 3"
 
 ---
 
+## Demo 7: Analytics Dashboard — Data → Parallel Analyses → HTML Report
+
+A complete analytics pipeline: read sales data, run 4 analyses in parallel, render as an HTML dashboard with bar charts, summary cards, and a data table.
+
+```json
+{
+  "stages": [
+    {"op": "Stage", "id": "json_read"},
+    {"op": "Parallel", "branches": {
+      "revenue":       {"op": "Stage", "id": "group_sum",   "config": {"group_by": "region", "value": "revenue"}},
+      "deals":         {"op": "Stage", "id": "group_count", "config": {"group_by": "region"}},
+      "trend":         {"op": "Stage", "id": "group_sum",   "config": {"group_by": "quarter", "value": "revenue"}},
+      "top_customers": {"stages": [sort(config: {key: "revenue"}), take(config: {count: 5})]}
+    }},
+    {"op": "Stage", "id": "html_dashboard", "config": {
+      "title": "Q1-Q3 2025 Sales Dashboard",
+      "sections": [
+        {"title": "Revenue by Region", "type": "bar_chart", "key": "revenue"},
+        {"title": "Deals by Region",   "type": "summary",   "key": "deals"},
+        {"title": "Revenue Trend",     "type": "bar_chart", "key": "trend"},
+        {"title": "Top 5 Deals",       "type": "table",     "key": "top_customers"}
+      ]
+    }}
+  ]
+}
+```
+
+```bash
+$ noether run dashboard.json --input '{"path": "/tmp/sales_data.json"}'
+  → 3083 char HTML dashboard, 7 stages, 4 seconds
+  → Open /tmp/sales_dashboard.html in browser
+```
+
+The `html_dashboard` stage is generic — it renders any combination of `bar_chart`, `summary`, `table`, and `line_chart` sections from named datasets produced by Parallel branches.
+
+[![Demo 7: Analytics Dashboard](https://asciinema.org/a/50SlrIuib9tZ0KyE.svg)](https://asciinema.org/a/50SlrIuib9tZ0KyE)
+
+---
+
 ## Demo 6: ML Pipeline — Train → Evaluate → Serve API
 
 End-to-end ML: from raw data to a production REST endpoint, using only composition graphs.
