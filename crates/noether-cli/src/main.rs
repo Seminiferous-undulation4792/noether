@@ -91,6 +91,14 @@ enum Commands {
         #[arg(long)]
         serve: Option<String>,
     },
+    /// Serve a composition graph as an HTTP API (no compilation needed)
+    Serve {
+        /// Path to the Lagrange graph JSON file
+        graph: String,
+        /// Bind address (e.g. ":8080", "0.0.0.0:3000")
+        #[arg(long, short, default_value = ":8080")]
+        port: String,
+    },
     /// Compose a solution from a problem description using the Composition Agent
     Compose {
         /// Problem description in natural language
@@ -512,6 +520,11 @@ fn main() {
                 },
             );
         }
+        Commands::Serve { graph, port } => {
+            let store = build_store(registry);
+            let executor = commands::executor_builder::build_executor(store.as_ref());
+            commands::serve::cmd_serve(store.as_ref(), &executor, &graph, &port);
+        }
         Commands::Compose {
             problem,
             model,
@@ -522,7 +535,6 @@ fn main() {
             budget_cents,
             verbose,
         } => {
-            // --verbose sets NOETHER_VERBOSE which the composition agent reads
             if verbose {
                 std::env::set_var("NOETHER_VERBOSE", "1");
             }

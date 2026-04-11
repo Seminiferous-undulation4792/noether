@@ -4,6 +4,7 @@ pub mod build_mobile;
 pub mod compose;
 pub mod executor_builder;
 pub mod run;
+pub mod serve;
 pub mod stage;
 pub mod store;
 pub mod trace;
