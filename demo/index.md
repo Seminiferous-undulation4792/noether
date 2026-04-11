@@ -392,41 +392,66 @@ $ noether compose --verbose "sort a list by score and take top 3"
 
 ---
 
-## Demo 6: ML Pipeline — Train, Predict, Evaluate
+## Demo 6: ML Pipeline — Train → Evaluate → Serve API
 
-Noether composes scikit-learn pipelines the same way it composes data pipelines. Each ML operation is a typed stage with `config` for parameters:
+End-to-end ML: from raw data to a production REST endpoint, using only composition graphs.
+
+**Step 1: Train** — read data + train a RandomForest:
 
 ```json
 {"stages": [
   {"op": "Stage", "id": "json_read"},
   {"op": "Stage", "id": "sklearn_train", "config": {
-    "target": "species",
-    "model": "RandomForestClassifier",
-    "params": {"n_estimators": 10},
-    "save_path": "/tmp/iris_rf.pkl"
-  }},
-  {"op": "Stage", "id": "sklearn_predict", "config": {
-    "model_path": "/tmp/iris_rf.pkl"
-  }},
-  {"op": "Stage", "id": "sklearn_evaluate", "config": {
-    "target": "species",
-    "predicted": "prediction"
+    "target": "species", "model": "RandomForestClassifier",
+    "params": {"n_estimators": 10}, "save_path": "/tmp/model.pkl"
   }}
 ]}
 ```
 
 ```bash
-$ noether run train.json --input '{"path": "/tmp/iris_train.json"}'
+$ noether run train.json --input '{"path": "/tmp/iris.json"}'
   → RandomForestClassifier trained on 15 samples
     Features: [petal_l, petal_w, sepal_l, sepal_w]
-
-$ noether run evaluate.json --input '{"path": "/tmp/iris_train.json"}'
-  → Accuracy: 1.0, F1: 1.0, Precision: 1.0, Recall: 1.0
 ```
 
-Model artifacts are file paths — `sklearn_train` saves via joblib, `sklearn_predict` loads from the same path. Pip packages (`scikit-learn`) are auto-installed in a cached venv on first run.
+**Step 2: Evaluate** — predict on test data + compute metrics:
 
-[![Demo 6: ML Pipeline](https://asciinema.org/a/zE95xpcwntzOSaJi.svg)](https://asciinema.org/a/zE95xpcwntzOSaJi)
+```bash
+$ noether run evaluate.json --input '{"path": "/tmp/iris.json"}'
+  → Accuracy: 1.0, F1: 1.0
+```
+
+**Step 3: Serve as REST API** — define routes in a config file:
+
+```json
+{
+  "routes": {
+    "/predict":    "predict.json",
+    "/importance": "importance.json"
+  }
+}
+```
+
+```bash
+$ noether serve api.json --port :8080
+
+$ curl -X POST http://localhost:8080/predict \
+    -d '[{"sepal_l": 5.1, "sepal_w": 3.5, "petal_l": 1.4, "petal_w": 0.2}]'
+  → {"ok": true, "output": [{"prediction": "setosa"}]}
+
+$ curl -X POST http://localhost:8080/importance \
+    -d '{"model_path": "/tmp/model.pkl"}'
+  → petal_l  0.413  █████████████
+     petal_w  0.307  ██████████
+     sepal_l  0.256  ████████
+     sepal_w  0.024  █
+```
+
+No Flask. No Docker. One binary, one config file. Each endpoint is a typed, type-checked composition graph.
+
+Pip packages (`scikit-learn`) are auto-installed in a cached venv on first run.
+
+[![Demo 6: ML End-to-End](https://asciinema.org/a/vLEsPeD9pNXb8Vfn.svg)](https://asciinema.org/a/vLEsPeD9pNXb8Vfn)
 
 ---
 
