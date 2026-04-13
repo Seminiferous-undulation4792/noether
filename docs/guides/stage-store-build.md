@@ -20,8 +20,8 @@ Think of it like publishing packages to npm, but instead of full libraries you p
 
 ```bash
 # Clone the Noether repo (you need the CLI)
-git clone https://github.com/your-org/solv-noether
-cd solv-noether
+git clone https://github.com/alpibrusl/noether
+cd noether
 cargo build --release -p noether-cli
 export PATH="$PWD/target/release:$PATH"
 
@@ -557,7 +557,7 @@ All fields are required. `tags` and `aliases` must each contain at least 2 entri
 
 ## 11. Getting help
 
-- **Noether docs**: `solv-noether/docs/`
+- **Noether docs**: `noether/docs/`
 - **Type system reference**: `docs/architecture/type-system.md`
 - **Existing stdlib stages** (80 examples to learn from): `crates/noether-core/src/stdlib/`
 - **Stage spec parsing code**: `crates/noether-cli/src/commands/stage.rs`

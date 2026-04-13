@@ -45,7 +45,7 @@ examples/todo/
 ### 1 — Register stages (first run only)
 
 ```bash
-cd /path/to/solv-noether
+cd /path/to/noether
 
 # Register the API stage
 noether stage add examples/todo/api/todo-api-stage.json
