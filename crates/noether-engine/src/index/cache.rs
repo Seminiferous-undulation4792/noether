@@ -122,4 +122,51 @@ impl CachedEmbeddingProvider {
         self.dirty = true;
         Ok(embedding)
     }
+
+    /// Embed many texts at once, calling `inner.embed_batch` on cache
+    /// misses. Cache hits are served from memory. Misses are sent in chunks
+    /// of `chunk_size` to keep individual requests under typical provider
+    /// payload limits and to avoid tripping rate limits with one giant call.
+    ///
+    /// Order of results matches order of `texts`.
+    pub fn embed_batch_cached(
+        &mut self,
+        texts: &[&str],
+        chunk_size: usize,
+    ) -> Result<Vec<Embedding>, EmbeddingError> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Identify misses without touching `inner` yet.
+        let hashes: Vec<String> = texts.iter().map(|t| Self::text_hash(t)).collect();
+        let mut miss_indices: Vec<usize> = Vec::new();
+        let mut miss_texts: Vec<&str> = Vec::new();
+        for (i, h) in hashes.iter().enumerate() {
+            if !self.cache.contains_key(h) {
+                miss_indices.push(i);
+                miss_texts.push(texts[i]);
+            }
+        }
+
+        // Resolve misses in chunks.
+        if !miss_texts.is_empty() {
+            let chunk = chunk_size.max(1);
+            let mut filled: Vec<Embedding> = Vec::with_capacity(miss_texts.len());
+            for slice in miss_texts.chunks(chunk) {
+                let part = self.inner.embed_batch(slice)?;
+                filled.extend(part);
+            }
+            for (idx, emb) in miss_indices.iter().zip(filled.into_iter()) {
+                self.cache.insert(hashes[*idx].clone(), emb);
+            }
+            self.dirty = true;
+        }
+
+        // Assemble results in input order.
+        Ok(hashes
+            .iter()
+            .map(|h| self.cache.get(h).cloned().expect("just inserted"))
+            .collect())
+    }
 }

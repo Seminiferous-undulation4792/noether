@@ -99,6 +99,59 @@ impl SemanticIndex {
         Ok(index)
     }
 
+    /// Build the index in a single pass: collect every signature/description/
+    /// example text upfront, dispatch all cache misses through
+    /// `inner.embed_batch` in chunks of `chunk_size`, then assemble the three
+    /// sub-indexes. Used by noether-cloud's registry on cold start so that
+    /// 486 stages × 3 texts = 1458 individual API calls collapse into ~46
+    /// batch calls of 32 texts each — well within typical rate limits.
+    pub fn from_stages_batched(
+        stages: Vec<Stage>,
+        mut cached_provider: cache::CachedEmbeddingProvider,
+        config: IndexConfig,
+        chunk_size: usize,
+    ) -> Result<Self, EmbeddingError> {
+        // Filter active stages once and pre-compute all three texts per stage.
+        let active: Vec<&Stage> = stages
+            .iter()
+            .filter(|s| !matches!(s.lifecycle, StageLifecycle::Tombstone))
+            .collect();
+
+        let mut all_texts: Vec<String> = Vec::with_capacity(active.len() * 3);
+        for s in &active {
+            all_texts.push(text::signature_text(s));
+            all_texts.push(text::description_text(s));
+            all_texts.push(text::examples_text(s));
+        }
+        let text_refs: Vec<&str> = all_texts.iter().map(|s| s.as_str()).collect();
+        let embeddings = cached_provider.embed_batch_cached(&text_refs, chunk_size)?;
+        cached_provider.flush();
+
+        // Distribute back into the three sub-indexes in stride 3.
+        let mut signature_index = SubIndex::new();
+        let mut semantic_index = SubIndex::new();
+        let mut example_index = SubIndex::new();
+        let mut tag_map: HashMap<String, Vec<StageId>> = HashMap::new();
+
+        for (i, s) in active.iter().enumerate() {
+            signature_index.add(s.id.clone(), embeddings[i * 3].clone());
+            semantic_index.add(s.id.clone(), embeddings[i * 3 + 1].clone());
+            example_index.add(s.id.clone(), embeddings[i * 3 + 2].clone());
+            for tag in &s.tags {
+                tag_map.entry(tag.clone()).or_default().push(s.id.clone());
+            }
+        }
+
+        Ok(Self {
+            provider: Box::new(cached_provider),
+            signature_index,
+            semantic_index,
+            example_index,
+            config,
+            tag_map,
+        })
+    }
+
     /// Build using a CachedEmbeddingProvider for persistent embedding cache.
     pub fn build_cached(
         store: &dyn StageStore,
