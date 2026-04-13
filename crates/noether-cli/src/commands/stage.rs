@@ -106,6 +106,35 @@ fn normalize_type_value(v: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Verify that a Python stage implementation defines a top-level
+/// `def execute(...)` function. The Noether runtime wraps user code and
+/// calls `execute(parsed_input)` — without it, stages fail with a confusing
+/// runtime error. We catch this at `stage add` time with a clear message.
+///
+/// Returns `Err` with the message to display, or `Ok(())` if a top-level
+/// `def execute` is present (no Python parser involved — a regex match on
+/// non-indented lines is sufficient and avoids a runtime dependency).
+fn validate_python_execute(code: &str) -> Result<(), String> {
+    for line in code.lines() {
+        // Skip indented lines (nested defs don't count) and comments.
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("def execute(") || trimmed.starts_with("async def execute(") {
+            return Ok(());
+        }
+    }
+    Err(
+        "Python stage implementation must define a top-level function \
+         `def execute(input): ...` that takes the parsed input dict and \
+         returns the output dict. Do not read from stdin or print to stdout — \
+         the Noether runtime handles I/O for you. \
+         See docs/guides/custom-stages.md (Python Stage Contract)."
+            .into(),
+    )
+}
+
 /// Human-friendly spec format for `noether stage add` — parsed from JSON,
 /// not a Rust struct (the `Value` parsing above handles it).
 /// Parse the spec file — supports both the simple `StageSpec` format and the
@@ -177,6 +206,12 @@ fn parse_spec(content: &str) -> Result<Stage, String> {
                 .ok_or("missing implementation.language")?
         };
 
+        // For Python stages, fail fast if the implementation does not define
+        // a top-level `def execute(input)`. The Nix wrapper requires it.
+        if matches!(language, "python" | "python3") {
+            validate_python_execute(code)?;
+        }
+
         // Compute the implementation hash from the code (SHA-256 hex).
         let impl_hash = {
             use sha2::{Digest, Sha256};
@@ -235,6 +270,7 @@ pub fn cmd_add(
     spec_path: &str,
     author_key: &SigningKey,
     index: &SemanticIndex,
+    auto_activate: bool,
 ) {
     let content = match fs::read_to_string(spec_path) {
         Ok(c) => c,
@@ -359,6 +395,12 @@ pub fn cmd_add(
 
     match store.put(stage) {
         Ok(id) => {
+            // Auto-promote Draft → Active unless caller asked for --draft.
+            // This matches user expectation: `stage add` is the publish step.
+            let mut activated = false;
+            if auto_activate && store.update_lifecycle(&id, StageLifecycle::Active).is_ok() {
+                activated = true;
+            }
             // Now deprecate the old version, pointing to the new one.
             if let Some(ref old_id) = deprecated_id {
                 let old_stage_id = StageId(old_id.clone());
@@ -374,6 +416,7 @@ pub fn cmd_add(
                 }
             }
             let mut result = json!({"id": id.0});
+            result["lifecycle"] = json!(if activated { "active" } else { "draft" });
             if let Some(old) = deprecated_id {
                 result["supersedes"] = json!(old);
             }
@@ -386,6 +429,118 @@ pub fn cmd_add(
             eprintln!("{}", acli_error(&format!("{e}")));
             std::process::exit(1);
         }
+    }
+}
+
+/// Bulk-import every `*.json` file in `directory` as a stage spec. Idempotent:
+/// existing stages (same content hash) are skipped. Per-file failures are
+/// reported but do not abort the overall sync.
+pub fn cmd_sync(
+    store: &mut dyn StageStore,
+    directory: &str,
+    author_key: &SigningKey,
+    index: &SemanticIndex,
+    auto_activate: bool,
+) {
+    let dir = std::path::Path::new(directory);
+    if !dir.is_dir() {
+        eprintln!("{}", acli_error(&format!("not a directory: {directory}")));
+        std::process::exit(1);
+    }
+
+    let mut paths: Vec<std::path::PathBuf> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+            .collect(),
+        Err(e) => {
+            eprintln!("{}", acli_error(&format!("failed to read directory: {e}")));
+            std::process::exit(1);
+        }
+    };
+    paths.sort();
+
+    let mut imported = Vec::new();
+    let mut skipped = Vec::new();
+    let mut failed = Vec::new();
+
+    for path in &paths {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                failed.push(json!({"file": path.display().to_string(), "error": format!("{e}")}));
+                continue;
+            }
+        };
+        let mut stage = match parse_spec(&content) {
+            Ok(s) => s,
+            Err(e) => {
+                failed.push(json!({"file": path.display().to_string(), "error": e}));
+                continue;
+            }
+        };
+
+        // Sign unsigned stages with the local author key (matches cmd_add).
+        if stage.ed25519_signature.is_none() && stage.signer_public_key.is_none() {
+            let sig_hex = sign_stage_id(&stage.id, author_key);
+            let pub_hex = hex::encode(author_key.verifying_key().to_bytes());
+            stage.ed25519_signature = Some(sig_hex);
+            stage.signer_public_key = Some(pub_hex);
+        }
+
+        // Skip if the same content hash is already in the store.
+        if matches!(store.get(&stage.id), Ok(Some(_))) {
+            skipped.push(json!({
+                "file": path.display().to_string(),
+                "id": stage.id.0,
+            }));
+            continue;
+        }
+
+        let stage_id = stage.id.clone();
+        match store.put(stage) {
+            Ok(id) => {
+                let mut lifecycle = "draft";
+                if auto_activate && store.update_lifecycle(&id, StageLifecycle::Active).is_ok() {
+                    lifecycle = "active";
+                }
+                imported.push(json!({
+                    "file": path.display().to_string(),
+                    "id": id.0,
+                    "lifecycle": lifecycle,
+                }));
+            }
+            Err(StoreError::AlreadyExists(id)) => {
+                skipped.push(json!({"file": path.display().to_string(), "id": id.0}));
+            }
+            Err(e) => {
+                failed.push(json!({
+                    "file": path.display().to_string(),
+                    "id": stage_id.0,
+                    "error": format!("{e}"),
+                }));
+            }
+        }
+    }
+
+    // Touch index var so unused-variable warning stays quiet (sync currently
+    // doesn't perform similarity dedup — that's add-only behaviour).
+    let _ = index;
+
+    let result = json!({
+        "directory": directory,
+        "imported": imported,
+        "skipped": skipped,
+        "failed": failed,
+        "counts": {
+            "imported": imported.len(),
+            "skipped": skipped.len(),
+            "failed": failed.len(),
+        }
+    });
+    println!("{}", acli_ok(result));
+    if !failed.is_empty() {
+        std::process::exit(1);
     }
 }
 
@@ -486,20 +641,80 @@ fn find_prefix_hint(store: &dyn StageStore, prefix: &str) -> Option<String> {
     }
 }
 
-pub fn cmd_list(store: &dyn StageStore, tag_filter: Option<&str>) {
-    let stages = store.list(Some(&StageLifecycle::Active));
-    let mut sorted: Vec<&Stage> = stages;
+/// Options for `noether stage list`. Defaults reproduce historical behavior
+/// (active stages only, 8-char ID prefixes, no signer/tag filter).
+pub struct ListOptions<'a> {
+    pub tag: Option<&'a str>,
+    pub signed_by: Option<&'a str>,
+    pub lifecycle: Option<&'a str>,
+    pub full_ids: bool,
+}
+
+pub fn cmd_list(store: &dyn StageStore, opts: ListOptions<'_>) {
+    // Resolve the lifecycle filter.
+    let lifecycle_filter: Option<StageLifecycle> = match opts.lifecycle {
+        None => Some(StageLifecycle::Active), // default: active only
+        Some("all") | Some("any") => None,
+        Some("draft") => Some(StageLifecycle::Draft),
+        Some("active") => Some(StageLifecycle::Active),
+        Some("tombstone") => Some(StageLifecycle::Tombstone),
+        Some("deprecated") => {
+            // store.list takes an exact lifecycle; fetch all and filter below.
+            None
+        }
+        Some(other) => {
+            eprintln!(
+                "{}",
+                acli_error(&format!(
+                    "unknown lifecycle '{other}' — use draft|active|deprecated|tombstone|all"
+                ))
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let mut sorted: Vec<&Stage> = store.list(lifecycle_filter.as_ref());
+    if matches!(opts.lifecycle, Some("deprecated")) {
+        sorted.retain(|s| matches!(s.lifecycle, StageLifecycle::Deprecated { .. }));
+    }
     sorted.sort_by(|a, b| a.description.cmp(&b.description));
 
-    if let Some(tag) = tag_filter {
+    if let Some(tag) = opts.tag {
         sorted.retain(|s| s.tags.iter().any(|t| t == tag));
+    }
+
+    if let Some(who) = opts.signed_by {
+        let stdlib_pub = {
+            use ed25519_dalek::SigningKey as _Sk;
+            let sk: _Sk = noether_core::stdlib::stdlib_signing_key();
+            hex::encode(sk.verifying_key().to_bytes())
+        };
+        match who {
+            "stdlib" => {
+                sorted.retain(|s| s.signer_public_key.as_deref() == Some(stdlib_pub.as_str()))
+            }
+            "custom" => {
+                sorted.retain(|s| s.signer_public_key.as_deref() != Some(stdlib_pub.as_str()))
+            }
+            prefix => sorted.retain(|s| {
+                s.signer_public_key
+                    .as_deref()
+                    .map(|k| k.starts_with(prefix))
+                    .unwrap_or(false)
+            }),
+        }
     }
 
     let entries: Vec<serde_json::Value> = sorted
         .iter()
         .map(|s| {
+            let id_str: &str = if opts.full_ids {
+                &s.id.0
+            } else {
+                &s.id.0[..8.min(s.id.0.len())]
+            };
             let mut entry = json!({
-                "id": &s.id.0[..8.min(s.id.0.len())],
+                "id": id_str,
                 "description": s.description,
                 "signature": format!("{} → {}", s.signature.input, s.signature.output),
                 "lifecycle": format!("{:?}", s.lifecycle),
@@ -651,7 +866,7 @@ mod tests {
             "output": "Text",
             "effects": ["Pure"],
             "language": "python",
-            "implementation": "import sys, json\ndata = json.load(sys.stdin)\nprint(json.dumps(data))",
+            "implementation": "def execute(input):\n    return input",
             "examples": [
                 {"input": "hello", "output": "hello"}
             ],
@@ -670,7 +885,7 @@ mod tests {
             "name": "bare_stage",
             "input": "Any",
             "output": "Any",
-            "implementation": "import sys; print(sys.stdin.read())"
+            "implementation": "def execute(input):\n    return input"
         });
 
         let stage = parse_spec(&spec.to_string()).expect("parse_spec should succeed");
@@ -686,7 +901,7 @@ mod tests {
             "input": {"Record": [["url", "Text"], ["headers", {"Union": ["Text", "Null"]}]]},
             "output": {"Record": [["status", "Number"], ["body", "Text"]]},
             "effects": ["Network", "Fallible"],
-            "implementation": "pass"
+            "implementation": "def execute(input):\n    return {\"status\": 200, \"body\": \"\"}"
         });
 
         let stage = parse_spec(&spec.to_string()).expect("parse_spec should succeed");
@@ -704,6 +919,46 @@ mod tests {
         );
     }
 
+    // ── validate_python_execute tests ────────────────────────────────────
+
+    #[test]
+    fn validate_python_accepts_top_level_execute() {
+        assert!(validate_python_execute("def execute(x):\n    return x").is_ok());
+        assert!(
+            validate_python_execute("import json\n\ndef execute(input):\n    return input").is_ok()
+        );
+        assert!(validate_python_execute("async def execute(input):\n    return input").is_ok());
+    }
+
+    #[test]
+    fn validate_python_rejects_module_level_io() {
+        let bad = "import sys, json\ndata = json.load(sys.stdin)\nprint(json.dumps(data))";
+        let err = validate_python_execute(bad).unwrap_err();
+        assert!(
+            err.contains("def execute"),
+            "error should mention contract: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_python_rejects_indented_execute() {
+        // A nested def inside a class shouldn't satisfy the contract.
+        let bad = "class Foo:\n    def execute(self, x):\n        return x";
+        assert!(validate_python_execute(bad).is_err());
+    }
+
+    #[test]
+    fn parse_spec_rejects_python_without_execute() {
+        let spec = json!({
+            "name": "bad_stage",
+            "input": "Any",
+            "output": "Any",
+            "implementation": "x = 1\nprint(x)"
+        });
+        let err = parse_spec(&spec.to_string()).unwrap_err();
+        assert!(err.contains("def execute"));
+    }
+
     #[test]
     fn parse_spec_full_doc_example() {
         let spec = r#"{
@@ -713,7 +968,7 @@ mod tests {
             "output": "Text",
             "effects": ["Fallible"],
             "language": "python",
-            "implementation": "from bs4 import BeautifulSoup\nimport sys, json\ndata = json.load(sys.stdin)\nsoup = BeautifulSoup(data['html'], 'html.parser')\nprint(json.dumps(soup.get_text(separator=' ', strip=True)))",
+            "implementation": "from bs4 import BeautifulSoup\ndef execute(input):\n    soup = BeautifulSoup(input['html'], 'html.parser')\n    return soup.get_text(separator=' ', strip=True)",
             "examples": [
                 {"input": {"html": "<h1>Hello</h1><p>World</p>"}, "output": "Hello World"},
                 {"input": {"html": ""}, "output": ""},

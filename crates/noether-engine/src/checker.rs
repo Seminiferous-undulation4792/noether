@@ -135,6 +135,12 @@ fn collect_capability_violations(
         CompositionNode::Retry { stage, .. } => {
             collect_capability_violations(stage, store, policy, violations);
         }
+        CompositionNode::Let { bindings, body } => {
+            for b in bindings.values() {
+                collect_capability_violations(b, store, policy, violations);
+            }
+            collect_capability_violations(body, store, policy, violations);
+        }
     }
 }
 
@@ -251,6 +257,12 @@ fn collect_effects_inner(
         CompositionNode::Retry { stage, .. } => {
             collect_effects_inner(stage, store, effects);
         }
+        CompositionNode::Let { bindings, body } => {
+            for b in bindings.values() {
+                collect_effects_inner(b, store, effects);
+            }
+            collect_effects_inner(body, store, effects);
+        }
     }
 }
 
@@ -351,6 +363,12 @@ fn collect_effect_violations(
         }
         CompositionNode::Retry { stage, .. } => {
             collect_effect_violations(stage, store, policy, violations);
+        }
+        CompositionNode::Let { bindings, body } => {
+            for b in bindings.values() {
+                collect_effect_violations(b, store, policy, violations);
+            }
+            collect_effect_violations(body, store, policy, violations);
         }
     }
 }
@@ -486,6 +504,12 @@ fn collect_signature_violations(
         }
         CompositionNode::Retry { stage, .. } => {
             collect_signature_violations(stage, store, violations);
+        }
+        CompositionNode::Let { bindings, body } => {
+            for b in bindings.values() {
+                collect_signature_violations(b, store, violations);
+            }
+            collect_signature_violations(body, store, violations);
         }
     }
 }
@@ -760,6 +784,12 @@ fn collect_warnings_inner(
                 warnings.retain(|w| !matches!(w, EffectWarning::FallibleWithoutRetry { stage_id } if stage_id == id));
             }
         }
+        CompositionNode::Let { bindings, body } => {
+            for b in bindings.values() {
+                collect_warnings_inner(b, store, warnings, total_cost, false);
+            }
+            collect_warnings_inner(body, store, warnings, total_cost, false);
+        }
     }
 }
 
@@ -815,7 +845,112 @@ fn check_node(
         CompositionNode::Fanout { source, targets } => check_fanout(source, targets, store, errors),
         CompositionNode::Merge { sources, target } => check_merge(sources, target, store, errors),
         CompositionNode::Retry { stage, .. } => check_node(stage, store, errors),
+        CompositionNode::Let { bindings, body } => check_let(bindings, body, store, errors),
     }
+}
+
+/// Type-check a `Let` node.
+///
+/// Each binding sees the **outer Let input**. The body sees an augmented
+/// record `{ ...outer-input fields, <binding>: <binding-output> }`. The
+/// Let's overall input requirement is the union of:
+///   - every binding's input field requirements (each binding sees the same
+///     outer input), and
+///   - any field the body's input requires that is *not* satisfied by a
+///     binding (those must come through from the outer input).
+///
+/// The Let's output is the body's output. When inputs are not Records (e.g.
+/// `Any`), we conservatively widen to `NType::Any` rather than failing.
+fn check_let(
+    bindings: &BTreeMap<String, CompositionNode>,
+    body: &CompositionNode,
+    store: &(impl StageStore + ?Sized),
+    errors: &mut Vec<GraphTypeError>,
+) -> Option<ResolvedType> {
+    if bindings.is_empty() {
+        errors.push(GraphTypeError::EmptyNode {
+            operator: "Let".into(),
+        });
+        return None;
+    }
+
+    // Resolve every binding's types.
+    let mut binding_outputs: BTreeMap<String, NType> = BTreeMap::new();
+    let mut required_input: BTreeMap<String, NType> = BTreeMap::new();
+    let mut any_input = false;
+
+    for (name, node) in bindings {
+        let resolved = check_node(node, store, errors)?;
+        binding_outputs.insert(name.clone(), resolved.output);
+        match resolved.input {
+            NType::Record(fields) => {
+                for (f, ty) in fields {
+                    required_input.insert(f, ty);
+                }
+            }
+            NType::Any => {
+                any_input = true;
+            }
+            other => {
+                // A binding that wants a non-Record, non-Any input doesn't
+                // compose cleanly with the Let's record-shaped input. We
+                // conservatively require the outer input to be Any.
+                let _ = other;
+                any_input = true;
+            }
+        }
+    }
+
+    // Build the body's input record by merging outer-input requirements with
+    // the binding outputs (bindings shadow outer fields with the same name).
+    let mut body_input_fields = required_input.clone();
+    for (name, out_ty) in &binding_outputs {
+        body_input_fields.insert(name.clone(), out_ty.clone());
+    }
+
+    let body_resolved = check_node(body, store, errors)?;
+
+    // Verify the body's input is satisfied by the augmented record. For each
+    // field the body requires, either it must come from a binding output (in
+    // which case the binding's output must be a subtype of the expected
+    // field) or from the outer input — in which case we add it to the Let's
+    // overall input requirement.
+    if let NType::Record(body_fields) = &body_resolved.input {
+        for (name, expected_ty) in body_fields {
+            let provided = body_input_fields.get(name).cloned();
+            match provided {
+                Some(actual) => {
+                    if let TypeCompatibility::Incompatible(reason) =
+                        is_subtype_of(&actual, expected_ty)
+                    {
+                        errors.push(GraphTypeError::SequentialTypeMismatch {
+                            position: 0,
+                            from_output: actual,
+                            to_input: expected_ty.clone(),
+                            reason,
+                        });
+                    }
+                }
+                None => {
+                    // Body needs a field neither bindings nor known outer
+                    // requirements provide. Mark it as required from outer
+                    // input.
+                    required_input.insert(name.clone(), expected_ty.clone());
+                }
+            }
+        }
+    }
+
+    let input = if any_input || required_input.is_empty() {
+        NType::Any
+    } else {
+        NType::Record(required_input)
+    };
+
+    Some(ResolvedType {
+        input,
+        output: body_resolved.output,
+    })
 }
 
 fn check_stage(

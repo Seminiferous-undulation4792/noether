@@ -6,7 +6,7 @@ use noether_engine::checker::{
 };
 use noether_engine::executor::budget::{build_cost_map, BudgetedExecutor};
 use noether_engine::executor::runner::run_composition;
-use noether_engine::lagrange::{compute_composition_id, parse_graph};
+use noether_engine::lagrange::{compute_composition_id, parse_graph, resolve_stage_prefixes};
 use noether_engine::planner::plan_graph;
 use noether_engine::trace::JsonFileTraceStore;
 use noether_store::StageStore;
@@ -40,7 +40,7 @@ pub fn cmd_run(
         }
     };
 
-    let graph = match parse_graph(&content) {
+    let mut graph = match parse_graph(&content) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("{}", acli_error(&format!("invalid graph JSON: {e}")));
@@ -48,9 +48,17 @@ pub fn cmd_run(
         }
     };
 
+    // 1a. Resolve stage ID prefixes against the store. Hand-authored graphs
+    //     can use the 8-char prefixes that `noether stage list` prints; the
+    //     resolver expands them to full SHA-256 IDs (or fails clearly if
+    //     ambiguous / not found).
+    if let Err(e) = resolve_stage_prefixes(&mut graph.root, store) {
+        eprintln!("{}", acli_error(&format!("stage reference: {e}")));
+        std::process::exit(1);
+    }
+
     // 1b. Resolve deprecated stages — rewrite any stage IDs that point to
     //     deprecated stages, following the successor_id chain.
-    let mut graph = graph;
     let rewrites = resolve_deprecated_stages(&mut graph.root, store);
     if !rewrites.is_empty() {
         for (old, new) in &rewrites {
@@ -301,6 +309,12 @@ fn resolve_deprecated_stages(
             rewrites.extend(resolve_deprecated_stages(target, store));
         }
         CompositionNode::Const { .. } | CompositionNode::RemoteStage { .. } => {}
+        CompositionNode::Let { bindings, body } => {
+            for b in bindings.values_mut() {
+                rewrites.extend(resolve_deprecated_stages(b, store));
+            }
+            rewrites.extend(resolve_deprecated_stages(body, store));
+        }
     }
 
     rewrites

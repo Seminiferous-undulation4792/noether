@@ -115,6 +115,12 @@ fn collect_costs(
             collect_costs(target, store, map);
         }
         Retry { stage, .. } => collect_costs(stage, store, map),
+        Let { bindings, body } => {
+            for b in bindings.values() {
+                collect_costs(b, store, map);
+            }
+            collect_costs(body, store, map);
+        }
     }
 }
 

@@ -572,6 +572,15 @@ impl NixExecutor {
 # ---- end implementation ----
 
 if __name__ == '__main__':
+    if 'execute' not in dir() or not callable(globals().get('execute')):
+        print(
+            "Noether stage error: implementation must define a top-level "
+            "function `def execute(input): ...` that takes the parsed input dict "
+            "and returns the output dict. Do not read from stdin or print to stdout — "
+            "the Noether runtime handles I/O for you.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     try:
         _raw = _json.loads(sys.stdin.read())
         # If the runtime passed input as a JSON-encoded string, decode it once more.

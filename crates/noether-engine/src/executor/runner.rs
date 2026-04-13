@@ -260,6 +260,45 @@ fn execute_node<E: StageExecutor + Sync>(
             }))
         }
         CompositionNode::RemoteStage { url, .. } => execute_remote_stage(url, input),
+        CompositionNode::Let { bindings, body } => {
+            // Execute bindings concurrently — each receives the outer input.
+            // Then merge: outer-input record fields + binding name → output.
+            let bindings_vec: Vec<(&str, &CompositionNode)> =
+                bindings.iter().map(|(n, b)| (n.as_str(), b)).collect();
+
+            let binding_results = std::thread::scope(|s| {
+                let handles: Vec<_> = bindings_vec
+                    .iter()
+                    .map(|(name, node)| {
+                        s.spawn(move || {
+                            let mut bt = Vec::new();
+                            let mut bc = 0usize;
+                            let r =
+                                execute_node(node, input, executor, &mut bt, &mut bc, &mut None);
+                            (*name, r, bt)
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("Let binding panicked"))
+                    .collect::<Vec<_>>()
+            });
+
+            // Start the merged record from the outer input (when it is one).
+            let mut merged = match input {
+                Value::Object(map) => map.clone(),
+                _ => serde_json::Map::new(),
+            };
+            for (name, result, branch_traces) in binding_results {
+                let value = result?;
+                merged.insert(name.to_string(), value);
+                traces.extend(branch_traces);
+            }
+
+            let body_input = Value::Object(merged);
+            execute_node(body, &body_input, executor, traces, step_counter, cache)
+        }
     }
 }
 

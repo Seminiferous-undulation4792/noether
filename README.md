@@ -221,7 +221,9 @@ noether store stats        # store statistics
 noether store health       # audit: signatures, missing examples, orphans
 noether store dedup        # find near-duplicate stages (cosine similarity)
 noether store dedup --apply  # deprecate confirmed duplicates (with successor pointer)
-noether stage activate <id>  # promote Draft → Active
+noether stage add my-stage.json    # adds AND auto-promotes to Active
+noether stage add my-stage.json --draft   # opt out of auto-activation
+noether stage activate <id>        # only needed for stages added with --draft
 ```
 
 ---

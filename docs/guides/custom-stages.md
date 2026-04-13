@@ -99,17 +99,41 @@ does not change.
 ## Path 2: JSON stage spec (for custom stages via CLI)
 
 You don't need to modify the Noether codebase for custom stages.
-Create a stage spec as JSON and submit it:
+Create a stage spec as JSON and submit it.
+
+### Python Stage Contract
+
+> **Read this first.** Every Python stage implementation **must** define a
+> single top-level function:
+>
+> ```python
+> def execute(input):
+>     # `input` is the parsed input dict (already JSON-decoded).
+>     # Return the output as a Python dict (or list / str / number).
+>     return {"result": ...}
+> ```
+>
+> **Do not** read from `sys.stdin`, **do not** `print()` the result, and
+> **do not** put logic at module level. The Noether runtime wraps your
+> function: it parses stdin, calls `execute(parsed_input)`, and serialises
+> whatever you return to stdout. Module-level I/O will conflict with the
+> wrapper and cause the stage to fail.
+>
+> `noether stage add` validates that your Python implementation defines a
+> top-level `def execute` and rejects the spec with a clear error if it
+> does not. `async def execute(input)` is also accepted.
+
+### Spec format
 
 ```json
 {
+  "name": "celsius_to_fahrenheit",
   "description": "Convert a temperature in Celsius to Fahrenheit",
-  "signature": {
-    "input": {"Record": {"celsius": "Number"}},
-    "output": {"Record": {"fahrenheit": "Number"}},
-    "effects": ["Pure"],
-    "implementation_hash": "sha256_of_your_implementation_code"
-  },
+  "input": {"Record": [["celsius", "Number"]]},
+  "output": {"Record": [["fahrenheit", "Number"]]},
+  "effects": ["Pure"],
+  "language": "python",
+  "implementation": "def execute(input):\n    return {'fahrenheit': input['celsius'] * 9 / 5 + 32}",
   "examples": [
     {"input": {"celsius": 0},   "output": {"fahrenheit": 32}},
     {"input": {"celsius": 100}, "output": {"fahrenheit": 212}},

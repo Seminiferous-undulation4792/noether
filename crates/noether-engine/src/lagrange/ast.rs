@@ -73,6 +73,28 @@ pub enum CompositionNode {
         max_attempts: u32,
         delay_ms: Option<u64>,
     },
+
+    /// Bind named intermediate computations and reference them in `body`.
+    ///
+    /// Each binding sub-node receives the **outer Let input** (the same value
+    /// passed to the Let node). After all bindings have produced a value, the
+    /// `body` runs against an augmented input record:
+    ///
+    ///   `{ ...outer-input fields, <binding-name>: <binding-output>, ... }`
+    ///
+    /// Bindings with the same name as an outer-input field shadow it. This
+    /// makes it possible to carry original-input fields into stages later in a
+    /// Sequential pipeline — the canonical example is scan → hash → diff,
+    /// where `diff` needs `state_path` from the original input but `hash`
+    /// would otherwise erase it.
+    ///
+    /// All bindings are scheduled concurrently — there are no inter-binding
+    /// references. If you need a binding to depend on another, wrap it in a
+    /// nested `Sequential`.
+    Let {
+        bindings: BTreeMap<String, CompositionNode>,
+        body: Box<CompositionNode>,
+    },
 }
 
 /// A complete composition graph with metadata.
@@ -138,6 +160,12 @@ fn collect_ids_recursive<'a>(node: &'a CompositionNode, ids: &mut Vec<&'a StageI
         }
         CompositionNode::Retry { stage, .. } => {
             collect_ids_recursive(stage, ids);
+        }
+        CompositionNode::Let { bindings, body } => {
+            for b in bindings.values() {
+                collect_ids_recursive(b, ids);
+            }
+            collect_ids_recursive(body, ids);
         }
     }
 }

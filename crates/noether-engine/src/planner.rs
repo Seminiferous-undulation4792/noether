@@ -172,6 +172,27 @@ fn flatten_node(
         CompositionNode::Retry { stage, .. } => {
             flatten_node(stage, steps, parallel_groups, store, depends_on)
         }
+        CompositionNode::Let { bindings, body } => {
+            // Bindings run concurrently against the outer input; body then
+            // sequentially after every binding completes.
+            let mut group = Vec::new();
+            let mut binding_outputs = Vec::new();
+            for node in bindings.values() {
+                let outputs = flatten_node(node, steps, parallel_groups, store, depends_on);
+                if let Some(&first) = outputs.first() {
+                    group.push(first);
+                }
+                binding_outputs.extend(outputs);
+            }
+            if group.len() > 1 {
+                parallel_groups.push(group);
+            }
+            // The body sees an input that depends on every binding output and
+            // the outer input.
+            let mut body_deps = depends_on.to_vec();
+            body_deps.extend(binding_outputs);
+            flatten_node(body, steps, parallel_groups, store, &body_deps)
+        }
     }
 }
 

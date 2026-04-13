@@ -145,12 +145,35 @@ enum StageCommands {
     Add {
         /// Path to the stage spec JSON file
         spec: String,
+        /// Keep the stage in Draft lifecycle instead of auto-promoting to Active.
+        /// By default, `stage add` activates the stage immediately.
+        #[arg(long)]
+        draft: bool,
+    },
+    /// Bulk-import all *.json stage specs from a directory
+    Sync {
+        /// Path to a directory containing one stage spec JSON per file
+        directory: String,
+        /// Keep imported stages in Draft lifecycle instead of auto-promoting
+        #[arg(long)]
+        draft: bool,
     },
     /// List all stages in the store
     List {
         /// Filter stages by tag (exact match)
         #[arg(long, value_name = "TAG")]
         tag: Option<String>,
+        /// Filter by signer: `stdlib` (only stdlib stages), `custom` (only
+        /// non-stdlib), or a hex-encoded public key prefix.
+        #[arg(long, value_name = "WHO")]
+        signed_by: Option<String>,
+        /// Filter by lifecycle: draft | active | deprecated | tombstone
+        /// (default: active only)
+        #[arg(long, value_name = "STATE")]
+        lifecycle: Option<String>,
+        /// Print full 64-character stage IDs instead of 8-character prefixes.
+        #[arg(long)]
+        full_ids: bool,
     },
     /// Retrieve a stage by its hash ID
     Get {
@@ -197,6 +220,28 @@ enum StoreCommands {
     },
     /// Audit store health: signatures, lifecycle, orphans, examples
     Health,
+}
+
+/// Read JSON input from stdin if it has been piped or redirected.
+/// Returns `None` when stdin is an interactive terminal — callers should
+/// then fall back to their default (typically `Value::Null`).
+fn read_stdin_input() -> Option<serde_json::Value> {
+    use std::io::{IsTerminal, Read};
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return None;
+    }
+    let mut buf = String::new();
+    if stdin.lock().read_to_string(&mut buf).is_err() {
+        return None;
+    }
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(
+        serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::Value::String(trimmed.into())),
+    )
 }
 
 fn noether_dir() -> std::path::PathBuf {
@@ -330,9 +375,20 @@ fn load_or_create_author_key(dir: &std::path::Path) -> SigningKey {
     key
 }
 
-fn build_index(store: &dyn StageStore) -> SemanticIndex {
+/// Build the semantic search index.
+///
+/// `loud` controls user-facing diagnostics:
+/// - `true` (search / compose): prints the active provider and any auth
+///   failure, since the user is performing a semantic-search operation and
+///   needs to know whether real embeddings are in use.
+/// - `false` (dedup checks during `add`, store stats, etc.): silently falls
+///   back to the mock provider on failure. The embedding result is best-
+///   effort here, so spamming a warning every invocation is just noise.
+///   Set `NOETHER_VERBOSE=1` to surface the warning anyway.
+fn build_index(store: &dyn StageStore, loud: bool) -> SemanticIndex {
+    let verbose = loud || std::env::var("NOETHER_VERBOSE").is_ok();
     let (provider, name) = providers::build_embedding_provider();
-    if name != "mock" {
+    if verbose && name != "mock" {
         eprintln!("Embedding provider: {name}");
     }
 
@@ -345,7 +401,9 @@ fn build_index(store: &dyn StageStore) -> SemanticIndex {
         let cached =
             noether_engine::index::cache::CachedEmbeddingProvider::new(provider, cache_path);
         SemanticIndex::build_cached(store, cached, IndexConfig::default()).unwrap_or_else(|e| {
-            eprintln!("Warning: embedding provider unavailable ({e}), using mock index.");
+            if verbose {
+                eprintln!("Warning: embedding provider unavailable ({e}), using mock index.");
+            }
             let mock = noether_engine::index::embedding::MockEmbeddingProvider::new(128);
             SemanticIndex::build(store, Box::new(mock), IndexConfig::default()).unwrap()
         })
@@ -421,17 +479,39 @@ fn main() {
             let mut store = build_store(registry);
             match command {
                 StageCommands::Search { query, tag } => {
-                    let index = build_index(store.as_ref());
+                    let index = build_index(store.as_ref(), true);
                     commands::stage::cmd_search(store.as_ref(), &index, &query, tag.as_deref());
                 }
-                StageCommands::Add { spec } => {
+                StageCommands::Add { spec, draft } => {
                     let author_key = load_or_create_author_key(&noether_dir());
-                    let index = build_index(store.as_ref());
-                    commands::stage::cmd_add(store.as_mut(), &spec, &author_key, &index);
+                    let index = build_index(store.as_ref(), false);
+                    commands::stage::cmd_add(store.as_mut(), &spec, &author_key, &index, !draft);
                 }
-                StageCommands::List { tag } => {
-                    commands::stage::cmd_list(store.as_ref(), tag.as_deref())
+                StageCommands::Sync { directory, draft } => {
+                    let author_key = load_or_create_author_key(&noether_dir());
+                    let index = build_index(store.as_ref(), false);
+                    commands::stage::cmd_sync(
+                        store.as_mut(),
+                        &directory,
+                        &author_key,
+                        &index,
+                        !draft,
+                    );
                 }
+                StageCommands::List {
+                    tag,
+                    signed_by,
+                    lifecycle,
+                    full_ids,
+                } => commands::stage::cmd_list(
+                    store.as_ref(),
+                    commands::stage::ListOptions {
+                        tag: tag.as_deref(),
+                        signed_by: signed_by.as_deref(),
+                        lifecycle: lifecycle.as_deref(),
+                        full_ids,
+                    },
+                ),
                 StageCommands::Get { hash } => commands::stage::cmd_get(store.as_ref(), &hash),
                 StageCommands::Activate { hash } => {
                     commands::stage::cmd_activate(store.as_mut(), &hash)
@@ -442,7 +522,7 @@ fn main() {
             let mut store = build_store(registry);
             match command {
                 StoreCommands::Stats => {
-                    let index = build_index(store.as_ref());
+                    let index = build_index(store.as_ref(), false);
                     commands::store::cmd_stats(store.as_ref(), &index);
                 }
                 StoreCommands::Retro {
@@ -450,7 +530,7 @@ fn main() {
                     apply,
                     threshold,
                 } => {
-                    let index = build_index(store.as_ref());
+                    let index = build_index(store.as_ref(), false);
                     commands::store::cmd_retro(store.as_mut(), &index, dry_run, apply, threshold);
                 }
                 StoreCommands::MigrateEffects { dry_run } => {
@@ -461,7 +541,7 @@ fn main() {
                     commands::store::cmd_health(store.as_ref());
                 }
                 StoreCommands::Dedup { threshold, apply } => {
-                    let index = build_index(store.as_ref());
+                    let index = build_index(store.as_ref(), false);
                     commands::store::cmd_dedup(store.as_mut(), &index, threshold, apply);
                 }
             }
@@ -476,10 +556,14 @@ fn main() {
         } => {
             let store = build_store(registry);
             let mut trace_store = init_trace_store();
-            let input_value = input
-                .as_deref()
-                .map(|s| serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())))
-                .unwrap_or(serde_json::Value::Null);
+            // Resolve --input. If absent, fall back to reading stdin when it
+            // is a pipe (so `echo '{...}' | noether run graph.json` works).
+            // When stdin is a terminal AND no --input was given, treat input
+            // as JSON null (preserves prior CLI semantics).
+            let input_value = match input.as_deref() {
+                Some(s) => serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())),
+                None => read_stdin_input().unwrap_or(serde_json::Value::Null),
+            };
             let policy = parse_capability_policy(allow_capabilities.as_deref());
             let effect_policy = parse_effect_policy(allow_effects.as_deref());
             commands::run::cmd_run(
@@ -539,7 +623,7 @@ fn main() {
                 std::env::set_var("NOETHER_VERBOSE", "1");
             }
             let mut store = build_store(registry);
-            let mut index = build_index(store.as_ref());
+            let mut index = build_index(store.as_ref(), true);
             let (llm, llm_name) = providers::build_llm_provider();
             if llm_name != "mock" {
                 eprintln!("LLM provider: {llm_name}");
@@ -549,10 +633,10 @@ fn main() {
                 .or_else(|| std::env::var("VERTEX_AI_MODEL").ok())
                 .unwrap_or_else(|| noether_engine::llm::LlmConfig::default().model);
 
-            let input_value = input
-                .as_deref()
-                .map(|s| serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())))
-                .unwrap_or(serde_json::Value::Null);
+            let input_value = match input.as_deref() {
+                Some(s) => serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.into())),
+                None => read_stdin_input().unwrap_or(serde_json::Value::Null),
+            };
 
             let cache_path = noether_dir().join("compositions.json");
             let policy = parse_capability_policy(allow_capabilities.as_deref());
