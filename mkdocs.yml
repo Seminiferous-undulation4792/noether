@@ -67,6 +67,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Demo: demo.md
+  - "Tutorial: citecheck as stages": tutorial/index.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quickstart: getting-started/quickstart.md
