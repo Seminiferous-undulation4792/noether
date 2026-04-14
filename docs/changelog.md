@@ -14,6 +14,58 @@ uses [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.1] — 2026-04-14
+
+Bug-fix release driven by issues caloron-noether hit migrating from v0.2.
+
+### Fixed
+
+- **Python `from __future__ import` no longer breaks the Nix wrapper.**
+  Stage implementations starting with `from __future__ import annotations`
+  used to land at line ~17 of the synthesized wrapper, which Python rejects
+  with `SyntaxError: from __future__ imports must occur at the beginning
+  of the file`. The wrapper now hoists every top-level
+  `from __future__ import …` line to the very first lines of the wrapped
+  module.
+
+- **`noether stage get <prefix>` now resolves prefixes**, the same way
+  `stage activate` and graph loaders already do. Previous versions did an
+  exact-string lookup and then surfaced a "did you mean" hint that echoed
+  the user's input back at them — because the hint also truncated to 16
+  characters even when the input was already 16 characters. Both halves
+  are fixed: `cmd_get` resolves through `resolve_stage_id`, and the hint
+  shows IDs at *prefix length + 8 chars* so collisions become visible.
+
+- **Stage-spec effect parser accepts `Llm`, `Cost`, `Unknown`, plus
+  lowercase / snake_case variants.** v0.2 specs that declared
+  `"effects": ["Llm"]` were silently dropping that effect with a cryptic
+  `Warning: unknown effect 'Llm', ignoring.` log line — the stage would
+  then run as if it were Pure. Now decoded correctly. Llm without an
+  explicit `model` defaults to `"unknown"`; Cost without `cents` defaults
+  to `0`.
+
+### Upgrading from v0.2
+
+The v0.2 → v0.3 transition has two breaking surfaces beyond what the
+v0.3.0 release notes covered. Both now have clearer error messages but
+existing specs still need a one-time rewrite:
+
+1. **Effect names are now case-tolerant** — `Llm`, `llm`, and any of
+   `non-deterministic` / `nondeterministic` / `NonDeterministic` all
+   work. If you saw `unknown effect '<X>', ignoring` warnings on v0.3.0,
+   re-add this release and the warnings go away.
+
+2. **Type-spec format is `{"Record": [["field", T], …]}`**, not the
+   `{"type": "Record", "fields": {…}}` form some v0.2 examples used.
+   We don't ship an automatic migration; rewrite by hand. The simplified
+   syntax (bare strings like `"Text"`, `"Number"`) works for primitives
+   inside Record cells.
+
+If you maintain a downstream stage catalogue and want a one-shot
+`noether stage-spec migrate` command, file an issue — happy to add.
+
+---
+
 ## [0.3.0] — 2026-04-14
 
 ### Added

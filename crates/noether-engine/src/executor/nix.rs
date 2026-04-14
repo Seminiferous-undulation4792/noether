@@ -558,17 +558,56 @@ impl NixExecutor {
 
     // ── Language wrappers ────────────────────────────────────────────────────
 
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn _expose_extract_future_imports(code: &str) -> (String, String) {
+        Self::extract_future_imports(code)
+    }
+
+    /// Pull every `from __future__ import ...` line out of `code` and return
+    /// `(joined_future_imports, code_without_them)`. The future imports are
+    /// returned with trailing newlines so the caller can embed them directly
+    /// at the top of the wrapper. Detection is line-based (no AST) — matches
+    /// any non-indented line starting with `from __future__ import`.
+    fn extract_future_imports(code: &str) -> (String, String) {
+        let mut hoisted = String::new();
+        let mut remaining = String::new();
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && trimmed.starts_with("from __future__ import")
+            {
+                hoisted.push_str(line);
+                hoisted.push('\n');
+            } else {
+                remaining.push_str(line);
+                remaining.push('\n');
+            }
+        }
+        (hoisted, remaining)
+    }
+
     fn wrap_python(user_code: &str) -> String {
         // Skip pip install — dependencies are handled by the venv executor
         // (build_nix_command creates a venv with pip packages pre-installed)
         // or by Nix packages (for known imports like numpy, pandas, etc.).
         let pip_install = String::new();
 
+        // Hoist any `from __future__ import ...` lines out of user code and
+        // emit them as the very first statements of the wrapper. Python
+        // requires `__future__` imports to be the first non-comment,
+        // non-docstring statement in a module — leaving them embedded in the
+        // user-code block (which is line ~17 of the wrapped file) raises
+        // `SyntaxError: from __future__ imports must occur at the
+        // beginning of the file`.
+        let (future_imports, user_code_clean) = Self::extract_future_imports(user_code);
+
         format!(
-            r#"import sys, json as _json
+            r#"{future_imports}import sys, json as _json
 {pip_install}
 # ---- user implementation ----
-{user_code}
+{user_code_clean}
 # ---- end implementation ----
 
 if __name__ == '__main__':
@@ -761,6 +800,41 @@ mod tests {
     fn classify_error_daemon_not_running() {
         let msg = NixExecutor::classify_error("error: cannot connect to nix daemon", Some(1));
         assert!(msg.contains("nix daemon is not running"), "got: {msg}");
+    }
+
+    #[test]
+    fn future_imports_are_hoisted_out_of_user_code() {
+        let user = "from __future__ import annotations\nimport json\n\ndef execute(input):\n    return input\n";
+        let wrapped = NixExecutor::wrap_python(user);
+        // The future import must come BEFORE `import sys, json as _json`.
+        let future_pos = wrapped
+            .find("from __future__ import annotations")
+            .expect("future import should be present in wrapper");
+        let stdlib_pos = wrapped
+            .find("import sys, json as _json")
+            .expect("stdlib imports should be present");
+        assert!(
+            future_pos < stdlib_pos,
+            "future import must precede stdlib imports in wrapped output"
+        );
+    }
+
+    #[test]
+    fn user_code_without_future_imports_is_unchanged() {
+        let user = "import json\n\ndef execute(input):\n    return input\n";
+        let (hoisted, remaining) = NixExecutor::extract_future_imports(user);
+        assert_eq!(hoisted, "");
+        assert_eq!(remaining.trim(), user.trim());
+    }
+
+    #[test]
+    fn nested_future_import_inside_function_is_not_hoisted() {
+        // Indented "from __future__" lines (inside a function) are not
+        // valid Python anyway, but the hoister must not promote them.
+        let user =
+            "def execute(input):\n    from __future__ import annotations\n    return input\n";
+        let (hoisted, _) = NixExecutor::extract_future_imports(user);
+        assert_eq!(hoisted, "");
     }
 
     #[test]

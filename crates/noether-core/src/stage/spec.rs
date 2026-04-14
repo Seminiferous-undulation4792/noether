@@ -129,14 +129,26 @@ pub fn parse_simple_spec(content: &str) -> Result<Stage, String> {
             })
             .unwrap_or_default();
 
+        // Accept TitleCase (canonical, what the docs show), the snake_case
+        // form used by --allow-effects on the CLI, and the bare lowercase
+        // shorthand. Llm and Cost without parameters default to a sensible
+        // stub: Llm{model:"unknown"} and Cost{cents:0}. Unknown maps to
+        // Effect::Unknown.
         let effects: Vec<Effect> = effects_raw
             .iter()
             .filter_map(|s| match s.as_str() {
-                "Pure" => Some(Effect::Pure),
-                "Network" => Some(Effect::Network),
-                "Fallible" => Some(Effect::Fallible),
-                "NonDeterministic" => Some(Effect::NonDeterministic),
-                "Process" => Some(Effect::Process),
+                "Pure" | "pure" => Some(Effect::Pure),
+                "Network" | "network" => Some(Effect::Network),
+                "Fallible" | "fallible" => Some(Effect::Fallible),
+                "NonDeterministic" | "non-deterministic" | "nondeterministic" => {
+                    Some(Effect::NonDeterministic)
+                }
+                "Process" | "process" => Some(Effect::Process),
+                "Llm" | "llm" => Some(Effect::Llm {
+                    model: "unknown".into(),
+                }),
+                "Cost" | "cost" => Some(Effect::Cost { cents: 0 }),
+                "Unknown" | "unknown" => Some(Effect::Unknown),
                 _ => None,
             })
             .collect();

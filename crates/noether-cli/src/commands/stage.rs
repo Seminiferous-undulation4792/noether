@@ -166,14 +166,26 @@ fn parse_spec(content: &str) -> Result<Stage, String> {
             })
             .unwrap_or_default();
 
+        // Accept TitleCase (canonical), snake_case (CLI form), and bare
+        // lowercase. Llm/Cost without parameters get sensible defaults
+        // (Llm{model:"unknown"}, Cost{cents:0}). Old v0.2 specs that
+        // shipped {"effect": "Llm"} now decode correctly instead of
+        // silently dropping with the cryptic 'unknown effect' warning.
         let effects: Vec<Effect> = effects_raw
             .iter()
             .filter_map(|s| match s.as_str() {
-                "Pure" => Some(Effect::Pure),
-                "Network" => Some(Effect::Network),
-                "Fallible" => Some(Effect::Fallible),
-                "NonDeterministic" => Some(Effect::NonDeterministic),
-                "Process" => Some(Effect::Process),
+                "Pure" | "pure" => Some(Effect::Pure),
+                "Network" | "network" => Some(Effect::Network),
+                "Fallible" | "fallible" => Some(Effect::Fallible),
+                "NonDeterministic" | "non-deterministic" | "nondeterministic" => {
+                    Some(Effect::NonDeterministic)
+                }
+                "Process" | "process" => Some(Effect::Process),
+                "Llm" | "llm" => Some(Effect::Llm {
+                    model: "unknown".into(),
+                }),
+                "Cost" | "cost" => Some(Effect::Cost { cents: 0 }),
+                "Unknown" | "unknown" => Some(Effect::Unknown),
                 other => {
                     eprintln!("Warning: unknown effect '{other}', ignoring.");
                     None
@@ -545,18 +557,36 @@ pub fn cmd_sync(
 }
 
 pub fn cmd_get(store: &dyn StageStore, hash: &str) {
-    let id = StageId(hash.into());
-    match store.get(&id) {
+    // Accept any unambiguous prefix — same resolution as `stage activate`,
+    // matching the 8-char form `stage list` prints. Prior versions required
+    // an exact-length match here, so passing a prefix returned
+    // `stage X not found  Did you mean: X` (the hint echoed the same input
+    // because the prefix was the right answer all along).
+    let resolved = match resolve_stage_id(store, hash) {
+        Some(id) => id,
+        None => {
+            let hint = find_prefix_hint(store, hash);
+            eprintln!(
+                "{}",
+                acli_error_hint(&format!("stage {hash} not found"), hint.as_deref())
+            );
+            std::process::exit(1);
+        }
+    };
+    match store.get(&resolved) {
         Ok(Some(stage)) => {
             let json = serde_json::to_value(stage).unwrap();
             println!("{}", acli_ok(json));
         }
         Ok(None) => {
-            // Try to find a prefix match for a useful hint
-            let hint = find_prefix_hint(store, hash);
+            // resolve_stage_id said this exists; if get() now disagrees the
+            // store changed under us. Surface as a real error.
             eprintln!(
                 "{}",
-                acli_error_hint(&format!("stage {hash} not found"), hint.as_deref(),)
+                acli_error(&format!(
+                    "stage {} disappeared between resolution and fetch",
+                    resolved.0
+                ))
             );
             std::process::exit(1);
         }
@@ -615,7 +645,18 @@ fn resolve_stage_id(store: &dyn StageStore, prefix: &str) -> Option<StageId> {
     }
 }
 
-/// Return a hint string if a stage ID starts with `prefix`.
+/// Return a hint string when stage resolution failed.
+///
+/// Three outcomes:
+/// 1. No stage starts with `prefix` → "search the catalogue" hint.
+/// 2. Exactly one stage starts with `prefix` → resolution would have
+///    succeeded; this branch is unreachable from the call sites that go
+///    through `resolve_stage_id` first.
+/// 3. Multiple stages start with `prefix` → "ambiguous" hint that prints
+///    each matching ID at a length **longer than the input** so the user
+///    can see why they collide. Earlier versions truncated to 16 chars
+///    even when the user already typed 16, producing the famously useless
+///    "Did you mean: <exact-input>?" non-hint.
 fn find_prefix_hint(store: &dyn StageStore, prefix: &str) -> Option<String> {
     if prefix.len() < 4 {
         return None;
@@ -624,21 +665,27 @@ fn find_prefix_hint(store: &dyn StageStore, prefix: &str) -> Option<String> {
         .list(None)
         .into_iter()
         .filter(|s| s.id.0.starts_with(prefix))
-        .take(3)
+        .take(5)
         .collect();
     if matches.is_empty() {
-        Some(
+        return Some(
             "No stage with that ID. Try `noether stage search \"<description>\"` \
              or `noether stage list` to browse all stages."
                 .into(),
-        )
-    } else {
-        let ids: Vec<_> = matches
-            .iter()
-            .map(|s| &s.id.0[..16.min(s.id.0.len())])
-            .collect();
-        Some(format!("Did you mean one of: {}?", ids.join(", ")))
+        );
     }
+    // Show enough characters to actually differentiate. Take the user's
+    // prefix length plus 8, capped at the full ID length.
+    let display_len = (prefix.len() + 8).min(64);
+    let ids: Vec<_> = matches
+        .iter()
+        .map(|s| &s.id.0[..display_len.min(s.id.0.len())])
+        .collect();
+    Some(format!(
+        "prefix '{prefix}' is ambiguous; matches {}: {}",
+        matches.len(),
+        ids.join(", ")
+    ))
 }
 
 /// Options for `noether stage list`. Defaults reproduce historical behavior
