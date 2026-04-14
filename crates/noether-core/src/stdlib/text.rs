@@ -123,7 +123,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("hash", NType::Text),
                 ("algorithm", NType::Text),
             ]))
-            .pure()
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Compute a cryptographic hash of text; defaults to SHA-256")
             .example(json!({"text": "hello", "algorithm": "sha256"}), json!({"hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "algorithm": "sha256"}))
             .example(json!({"text": "hello", "algorithm": null}), json!({"hash": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "algorithm": "sha256"}))

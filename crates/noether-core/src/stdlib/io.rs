@@ -45,7 +45,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("content", NType::Text),
                 ("size_bytes", NType::Number),
             ]))
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .capability(Capability::FsRead)
             .description("Read a file's contents as text")
             .example(json!({"path": "/tmp/test.txt"}), json!({"content": "hello world", "size_bytes": 11}))
@@ -161,7 +161,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
         StageBuilder::new("env_get")
             .input(NType::record([("name", NType::Text)]))
             .output(NType::union(vec![NType::Text, NType::Null]))
-            .pure()
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .capability(Capability::FsRead)
             .description("Read an environment variable; returns null if not set")
             .example(json!({"name": "HOME"}), json!("/home/user"))

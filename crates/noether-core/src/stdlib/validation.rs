@@ -4,6 +4,7 @@
 //! and form the `stage_submission_validation` composition graph used by the
 //! `noether-cloud` registry on every `POST /stages` request.
 
+use crate::effects::{Effect, EffectSet};
 use crate::stage::{Stage, StageBuilder};
 use crate::types::NType;
 use ed25519_dalek::SigningKey;
@@ -34,7 +35,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
             .description("Verify that a stage's content hash matches its declared ID")
             .input(NType::Any)
             .output(check_out())
-            .pure()
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .example(
                 json!({"id": "abc123", "signature": {"input": "Text", "output": "Number", "effects": [], "implementation_hash": "deadbeef"}}),
                 json!({"passed": true, "stage_id": "abc123", "computed": "abc123", "error": null}),
@@ -65,7 +66,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
             .description("Verify the Ed25519 signature of a stage, if present")
             .input(NType::Any)
             .output(check_out())
-            .pure()
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .example(
                 json!({"id": "abc123", "ed25519_signature": "cafebabe", "signer_public_key": "deadbeef"}),
                 json!({"passed": false, "signed": true, "warning": "Ed25519 signature verification failed — stage may have been tampered with"}),

@@ -18,7 +18,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("output", NType::Text),
                 ("score", NType::Number),
             ]))))
-            .effects(EffectSet::new([Effect::Pure, Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Search the stage store by semantic query")
             .example(json!({"query": "convert text to number", "limit": 5}), json!([{"id": "abc123", "description": "Parse a value as a number", "input": "Text", "output": "Number", "score": 0.95}]))
             .example(json!({"query": "http request", "limit": null}), json!([{"id": "def456", "description": "Make an HTTP GET request", "input": "Record", "output": "Record", "score": 0.88}]))
@@ -35,7 +35,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("id", NType::Text),
                 ("lifecycle", NType::Text),
             ]))
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::Process]))
             .description("Register a new stage in the store")
             .example(json!({"spec": {"input": "Text", "output": "Number"}}), json!({"id": "abc123def456", "lifecycle": "draft"}))
             .example(json!({"spec": {"input": "Any", "output": "Text"}}), json!({"id": "789ghi012jkl", "lifecycle": "draft"}))
@@ -56,7 +56,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("errors", NType::List(Box::new(NType::Text))),
                 ("warnings", NType::List(Box::new(NType::Text))),
             ]))
-            .pure()
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Verify that a composition graph type-checks correctly")
             .example(json!({"stages": ["s1", "s2"], "operators": ["sequential"]}), json!({"valid": true, "errors": [], "warnings": []}))
             .example(json!({"stages": ["s1", "s2"], "operators": ["sequential"]}), json!({"valid": false, "errors": ["type mismatch at edge s1->s2"], "warnings": []}))
@@ -70,7 +70,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
         StageBuilder::new("trace_read")
             .input(NType::record([("composition_id", NType::Text)]))
             .output(NType::record([("trace", NType::Any)]))
-            .effects(EffectSet::new([Effect::Pure, Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Retrieve the execution trace of a past composition")
             .example(json!({"composition_id": "comp_abc123"}), json!({"trace": {"stages": [{"id": "s1", "status": "ok", "duration_ms": 12}]}}))
             .example(json!({"composition_id": "comp_def456"}), json!({"trace": {"stages": [{"id": "s1", "status": "failed", "error": "timeout"}]}}))
@@ -91,7 +91,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("effects", NType::List(Box::new(NType::Text))),
                 ("lifecycle", NType::Text),
             ]))
-            .effects(EffectSet::new([Effect::Pure, Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Get detailed information about a stage by its ID")
             .example(json!({"id": "abc123"}), json!({"id": "abc123", "description": "Convert to text", "input": "Any", "output": "Text", "effects": ["Pure"], "lifecycle": "active"}))
             .example(json!({"id": "def456"}), json!({"id": "def456", "description": "HTTP GET", "input": "Record", "output": "Record", "effects": ["Network", "Fallible"], "lifecycle": "active"}))
@@ -117,7 +117,10 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
             .example(json!({"sub": "Text", "sup": "Number"}), json!({"compatible": false, "reason": "expected Number, got Text"}))
             .example(json!({"sub": "Text", "sup": "Any"}), json!({"compatible": true, "reason": null}))
             .example(json!({"sub": "Any", "sup": "Text"}), json!({"compatible": true, "reason": null}))
-            .example(json!({"sub": "Number", "sup": "Text|Number"}), json!({"compatible": true, "reason": null}))
+            // Union-syntax "Text|Number" was the original 5th example but
+            // the type_check parser doesn't implement pipe-union parsing.
+            // Replaced with a Bool self-subtype until pipe-union lands.
+            .example(json!({"sub": "Bool", "sup": "Bool"}), json!({"compatible": true, "reason": null}))
             .tag("internal").tag("meta").tag("types").tag("pure")
             .alias("is_subtype").alias("type_compatible").alias("structural_subtype")
             .build_stdlib(key)

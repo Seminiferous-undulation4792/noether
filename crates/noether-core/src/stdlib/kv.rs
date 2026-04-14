@@ -52,7 +52,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ns_field(),
             ]))
             .output(NType::Any)
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Retrieve a JSON value by key from the persistent key-value store; returns null if not found")
             .example(
                 json!({"key": "last_query", "namespace": null}),
@@ -86,7 +86,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ns_field(),
             ]))
             .output(NType::Bool)
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Delete a key from the persistent key-value store; returns true if the key existed")
             .example(
                 json!({"key": "last_query", "namespace": null}),
@@ -120,7 +120,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ns_field(),
             ]))
             .output(NType::Bool)
-            .pure()
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Check whether a key exists in the persistent key-value store")
             .example(
                 json!({"key": "last_query", "namespace": null}),
@@ -154,7 +154,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ns_field(),
             ]))
             .output(NType::List(Box::new(NType::Text)))
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("List all keys in the persistent key-value store that start with a given prefix")
             .example(
                 json!({"prefix": "", "namespace": null}),

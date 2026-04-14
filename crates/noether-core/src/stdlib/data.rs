@@ -73,7 +73,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
         StageBuilder::new("arrow_from_records")
             .input(NType::List(Box::new(NType::Any)))
             .output(NType::Bytes)
-            .effects(EffectSet::new([Effect::Pure, Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Convert a list of records to Apache Arrow IPC bytes")
             .example(json!([{"a": 1}, {"a": 2}]), json!("QVJST1dfSVBD"))
             .example(json!([{"x": "hello"}]), json!("QVJST1dfSVBD"))
@@ -90,7 +90,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 key: Box::new(NType::Text),
                 value: Box::new(NType::Any),
             })))
-            .effects(EffectSet::new([Effect::Pure, Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Decode Apache Arrow IPC bytes to a list of record maps")
             .example(json!("QVJST1dfSVBD"), json!([{"a": 1}, {"a": 2}]))
             .example(json!("QVJST1dfSVBD"), json!([{"x": "hello"}]))

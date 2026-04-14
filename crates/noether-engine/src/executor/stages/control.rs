@@ -34,15 +34,22 @@ pub fn is_subtype(input: &Value) -> Result<Value, ExecutionError> {
         .get("sup")
         .ok_or_else(|| fail("is_subtype", "missing field 'sup'"))?;
 
-    let sub: NType = serde_json::from_value(sub_val.clone())
+    // Accept both the canonical (`{"kind":"Text"}`) and the simplified
+    // (`"Text"`, `{"Record":[...]}`) type-syntax forms — stage example
+    // authors otherwise have to hand-write the verbose `kind`/`value`
+    // envelope. normalize_type is the same helper the spec parser uses.
+    let sub: NType = serde_json::from_value(noether_core::stage::normalize_type(sub_val))
         .map_err(|e| fail("is_subtype", format!("invalid 'sub' type: {e}")))?;
-    let sup: NType = serde_json::from_value(sup_val.clone())
+    let sup: NType = serde_json::from_value(noether_core::stage::normalize_type(sup_val))
         .map_err(|e| fail("is_subtype", format!("invalid 'sup' type: {e}")))?;
 
-    let result = is_subtype_of(&sub, &sup);
+    let (compatible, reason) = match is_subtype_of(&sub, &sup) {
+        TypeCompatibility::Compatible => (true, None),
+        TypeCompatibility::Incompatible(r) => (false, Some(format!("{r}"))),
+    };
     Ok(json!({
-        "compatible": matches!(result, TypeCompatibility::Compatible),
-        "reason": null,
+        "compatible": compatible,
+        "reason": reason,
     }))
 }
 

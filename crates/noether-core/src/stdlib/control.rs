@@ -52,7 +52,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("delay_ms", NType::optional(NType::Number)),
             ]))
             .output(NType::Any)
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::Process]))
             .description(
                 "Retry a fallible stage up to N times with optional delay between attempts",
             )
@@ -90,7 +90,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("input", NType::Any),
             ]))
             .output(NType::Any)
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::Process]))
             .description("Try stages in order until one succeeds; fails if all fail")
             .example(
                 json!({"stages": ["primary", "secondary"], "input": "data"}),
@@ -121,7 +121,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("timeout_ms", NType::Number),
             ]))
             .output(NType::Any)
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::Process]))
             .description("Run a stage with a deadline; fails if the stage exceeds the timeout")
             .example(
                 json!({"stage_id": "fast", "input": "data", "timeout_ms": 5000}),
@@ -157,7 +157,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("input", NType::Any),
             ]))
             .output(NType::Any)
-            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::Process]))
             .description("Run multiple stages concurrently; return the first to complete")
             .example(
                 json!({"stages": ["fast", "slow"], "input": "data"}),
@@ -184,7 +184,7 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
                 ("inputs", NType::List(Box::new(NType::Any))),
             ]))
             .output(NType::List(Box::new(NType::Any)))
-            .effects(EffectSet::new([Effect::Fallible]))
+            .effects(EffectSet::new([Effect::Fallible, Effect::Process]))
             .description("Run N stages concurrently on N inputs; collect all results")
             .example(
                 json!({"stages": ["s1", "s2"], "inputs": ["a", "b"]}),
