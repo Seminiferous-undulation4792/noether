@@ -126,7 +126,11 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
         StageBuilder::new("stdin_read")
             .input(NType::Null)
             .output(NType::Text)
-            .effects(EffectSet::new([Effect::Fallible]))
+            // NonDeterministic: output depends on ambient stdin, not on
+            // input. Required for `stage test` to skip it — running it
+            // during a test harness would spuriously mismatch against the
+            // declared example outputs.
+            .effects(EffectSet::new([Effect::Fallible, Effect::NonDeterministic]))
             .description("Read all available text from standard input")
             .example(json!(null), json!("hello world"))
             .example(json!(null), json!("line1\nline2"))
@@ -140,7 +144,10 @@ pub fn stages(key: &SigningKey) -> Vec<Stage> {
         StageBuilder::new("stdout_write")
             .input(NType::record([("text", NType::Text)]))
             .output(NType::Null)
-            .pure()
+            // Writing to stdout is a process-level side effect, not Pure —
+            // leaving it Pure caused `stage test` to contaminate the ACLI
+            // report with the stage's own print output when exercised.
+            .effects(EffectSet::new([Effect::Process]))
             .description("Write text to standard output")
             .example(json!({"text": "hello"}), json!(null))
             .example(json!({"text": "line1\nline2"}), json!(null))

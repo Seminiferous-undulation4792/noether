@@ -185,6 +185,13 @@ enum StageCommands {
         /// The stage hash (or prefix)
         hash: String,
     },
+    /// Verify a stage's implementation against its declared examples.
+    /// With no argument, tests every Active stage in the store.
+    Test {
+        /// Optional stage hash or prefix. If omitted, every Active stage
+        /// is tested.
+        hash: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -515,6 +522,10 @@ fn main() {
                 StageCommands::Get { hash } => commands::stage::cmd_get(store.as_ref(), &hash),
                 StageCommands::Activate { hash } => {
                     commands::stage::cmd_activate(store.as_mut(), &hash)
+                }
+                StageCommands::Test { hash } => {
+                    let executor = commands::executor_builder::build_executor(store.as_ref());
+                    commands::stage::cmd_test(store.as_ref(), &executor, hash.as_deref());
                 }
             }
         }

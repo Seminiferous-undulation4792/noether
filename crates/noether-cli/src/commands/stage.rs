@@ -732,6 +732,129 @@ pub fn cmd_list(store: &dyn StageStore, opts: ListOptions<'_>) {
     );
 }
 
+/// `noether stage test [ID_PREFIX]` — run each stage against its own
+/// `examples` and compare actual output to declared output via canonical
+/// JSON hashing. Skips `Network` / `Llm` / `NonDeterministic` stages
+/// with a clear reason.
+///
+/// Exit code: 0 on success (all non-skipped stages pass), 1 if any stage
+/// has at least one mismatched example.
+pub fn cmd_test(
+    store: &dyn StageStore,
+    executor: &impl noether_engine::executor::StageExecutor,
+    id_prefix: Option<&str>,
+) {
+    use noether_engine::stage_test::{verify_stage, ReportOutcome};
+
+    let stages: Vec<&Stage> = if let Some(prefix) = id_prefix {
+        let matches: Vec<&Stage> = store
+            .list(None)
+            .into_iter()
+            .filter(|s| s.id.0.starts_with(prefix))
+            .collect();
+        match matches.len() {
+            0 => {
+                eprintln!(
+                    "{}",
+                    acli_error(&format!("no stage matches prefix '{prefix}'"))
+                );
+                std::process::exit(1);
+            }
+            1 => matches,
+            _ => {
+                eprintln!(
+                    "{}",
+                    acli_error(&format!(
+                        "prefix '{prefix}' is ambiguous — {} matches",
+                        matches.len()
+                    ))
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        store.list(Some(&StageLifecycle::Active))
+    };
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    let mut skipped = 0usize;
+    let mut entries: Vec<serde_json::Value> = Vec::with_capacity(stages.len());
+
+    for stage in &stages {
+        let report = verify_stage(stage, executor);
+        let (status, details) = match &report.outcome {
+            ReportOutcome::Skipped { reason } => {
+                skipped += 1;
+                ("skipped", json!({"reason": reason.to_string()}))
+            }
+            ReportOutcome::Tested { examples } => {
+                let all_ok = examples
+                    .iter()
+                    .all(|e| matches!(e, noether_engine::stage_test::ExampleOutcome::Ok));
+                if all_ok {
+                    passed += 1;
+                    (
+                        "passed",
+                        json!({"examples": examples.len(), "all_match": true}),
+                    )
+                } else {
+                    failed += 1;
+                    let mismatches: Vec<serde_json::Value> = examples
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, outcome)| match outcome {
+                            noether_engine::stage_test::ExampleOutcome::Ok => None,
+                            noether_engine::stage_test::ExampleOutcome::Mismatch {
+                                expected,
+                                actual,
+                            } => Some(json!({
+                                "index": i,
+                                "kind": "mismatch",
+                                "expected": expected,
+                                "actual": actual,
+                            })),
+                            noether_engine::stage_test::ExampleOutcome::Errored { message } => {
+                                Some(json!({
+                                    "index": i,
+                                    "kind": "error",
+                                    "message": message,
+                                }))
+                            }
+                        })
+                        .collect();
+                    (
+                        "failed",
+                        json!({
+                            "examples": examples.len(),
+                            "failures": mismatches,
+                        }),
+                    )
+                }
+            }
+        };
+        entries.push(json!({
+            "id": &report.stage_id[..8.min(report.stage_id.len())],
+            "description": report.description,
+            "status": status,
+            "details": details,
+        }));
+    }
+
+    let result = json!({
+        "total": stages.len(),
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "stages": entries,
+    });
+    println!("{}", acli_ok(result));
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}
+
 pub fn cmd_search(store: &dyn StageStore, index: &SemanticIndex, query: &str, tag: Option<&str>) {
     let results = match index.search_filtered(query, 20, tag) {
         Ok(r) => r,

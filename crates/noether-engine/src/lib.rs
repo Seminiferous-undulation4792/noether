@@ -18,6 +18,7 @@ pub mod error;
 pub mod executor;
 pub mod lagrange;
 pub mod planner;
+pub mod stage_test;
 pub mod trace;
 
 pub use noether_core as core;
