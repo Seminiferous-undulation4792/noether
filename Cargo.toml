@@ -5,10 +5,11 @@ members = [
     "crates/noether-store",
     "crates/noether-engine",
     "crates/noether-cli",
+    "crates/noether-scheduler",
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 license = "EUPL-1.2"
 repository = "https://github.com/alpibrusl/noether"

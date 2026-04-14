@@ -38,11 +38,16 @@ Noether is **not** a workflow orchestrator, AI agent framework, or pipeline runn
 
 ## Install
 
+Two binaries ship from this repo:
+
+- **`noether`** — the main CLI (`stage`, `store`, `run`, `build`, `compose`, `trace`).
+- **`noether-scheduler`** — a cron runner that executes Lagrange graphs on a schedule and fires webhooks with the result. Optional; install if you have recurring compositions.
+
 | | |
 |---|---|
-| **crates.io** | `cargo install noether-cli` |
-| **GitHub Releases** | [Download prebuilt binary](https://github.com/alpibrusl/noether/releases/latest) — Linux / macOS / Windows |
-| **Source** | `cargo build --release -p noether-cli` |
+| **crates.io** | `cargo install noether-cli noether-scheduler` |
+| **GitHub Releases** | [Download prebuilt binaries](https://github.com/alpibrusl/noether/releases/latest) — Linux / macOS / Windows, both binaries packaged separately |
+| **Source** | `cargo build --release -p noether-cli -p noether-scheduler` |
 
 Nix is optional; it's required only to execute Python / JavaScript / Bash stages in a hermetic sandbox. Rust-native stdlib stages run without it.
 
@@ -187,6 +192,7 @@ L1 — Execution Layer      Nix hermetic sandbox · Python/JS/Bash runtimes
 | `noether-store` | `StageStore` trait + in-memory / JSON-file implementations |
 | `noether-engine` | Lagrange AST, type checker, planner, executor, semantic index, LLM agent |
 | `noether-cli` | ACLI-compliant CLI — `stage`, `store`, `run`, `build`, `compose`, `trace` |
+| `noether-scheduler` | Cron runner — executes Lagrange graphs on a schedule, fires webhooks on result |
 
 Full walk-through: **[Architecture Overview →](./docs/architecture/overview.md)**
 
