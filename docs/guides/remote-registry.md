@@ -111,12 +111,35 @@ for a reference `docker-compose.prod.yml` + Kubernetes manifests.
 ## Scheduled compositions
 
 `noether-scheduler` runs Lagrange graphs on cron and fires a webhook with
-the result. Config:
+the result. It's a separate binary that ships from the same repo as
+`noether`:
+
+```bash
+cargo install noether-scheduler
+# or download from github.com/alpibrusl/noether/releases/latest
+```
+
+Point it at a JSON config file. All three invocation forms work:
+
+```bash
+noether-scheduler --config scheduler.json    # flag
+noether-scheduler scheduler.json             # positional
+noether-scheduler                             # defaults to ./scheduler.json
+```
+
+Config format:
 
 ```json title="scheduler.json"
 {
   "store_path": ".noether/registry.json",
+  "registry_url": "https://registry.alpibru.com",
   "jobs": [
+    {
+      "name": "sprint-tick",
+      "cron": "* * * * *",
+      "graph": "compositions/sprint_tick.json",
+      "input": { "sprint_id": "sprint-1" }
+    },
     {
       "name": "hourly-health",
       "cron": "0 * * * *",
@@ -127,9 +150,19 @@ the result. Config:
 }
 ```
 
-```bash
-noether-scheduler scheduler.json
-```
+Per-job fields:
+
+| Field | Required | Purpose |
+|---|---|---|
+| `name` | yes | job identifier for logs + trace correlation |
+| `cron` | yes | standard 5-field crontab expression |
+| `graph` | yes | path to a Lagrange JSON graph |
+| `input` | no | static JSON value passed as the graph's root input |
+| `webhook` | no | POST the result (output + trace ID) to this URL |
+
+Top-level fields: `store_path` for a local file store, or `registry_url`
+(+ optional `registry_api_key`) to resolve stages against a remote
+registry. Use one, not both.
 
 ## Troubleshooting
 
