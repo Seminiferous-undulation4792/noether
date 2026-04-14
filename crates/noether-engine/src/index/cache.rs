@@ -126,19 +126,31 @@ impl CachedEmbeddingProvider {
     /// Embed many texts at once, calling `inner.embed_batch` on cache
     /// misses. Cache hits are served from memory. Misses are sent in chunks
     /// of `chunk_size` to keep individual requests under typical provider
-    /// payload limits and to avoid tripping rate limits with one giant call.
+    /// payload limits.
+    ///
+    /// Two robustness properties matter when a remote provider is rate-limited:
+    ///
+    /// - **Progressive caching.** Each successful batch is committed to the
+    ///   in-memory cache *and* flushed to disk immediately. If the next
+    ///   batch trips a 429, the function still returns Err — but the partial
+    ///   work done so far is durable, so the next process restart picks up
+    ///   exactly where the crash left off.
+    /// - **Inter-batch pacing.** Between batch calls we sleep
+    ///   `inter_batch_delay`. With Mistral's free-tier 1 req/s ceiling, a
+    ///   ~1100 ms sleep keeps us comfortably under the limit; paid tiers
+    ///   can pass `Duration::ZERO` to skip pacing.
     ///
     /// Order of results matches order of `texts`.
-    pub fn embed_batch_cached(
+    pub fn embed_batch_cached_paced(
         &mut self,
         texts: &[&str],
         chunk_size: usize,
+        inter_batch_delay: std::time::Duration,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
-        // Identify misses without touching `inner` yet.
         let hashes: Vec<String> = texts.iter().map(|t| Self::text_hash(t)).collect();
         let mut miss_indices: Vec<usize> = Vec::new();
         let mut miss_texts: Vec<&str> = Vec::new();
@@ -149,24 +161,37 @@ impl CachedEmbeddingProvider {
             }
         }
 
-        // Resolve misses in chunks.
         if !miss_texts.is_empty() {
             let chunk = chunk_size.max(1);
-            let mut filled: Vec<Embedding> = Vec::with_capacity(miss_texts.len());
-            for slice in miss_texts.chunks(chunk) {
+            let mut consumed = 0usize;
+            for (b, slice) in miss_texts.chunks(chunk).enumerate() {
+                if b > 0 && !inter_batch_delay.is_zero() {
+                    std::thread::sleep(inter_batch_delay);
+                }
                 let part = self.inner.embed_batch(slice)?;
-                filled.extend(part);
+                for (j, emb) in part.into_iter().enumerate() {
+                    let idx = miss_indices[consumed + j];
+                    self.cache.insert(hashes[idx].clone(), emb);
+                }
+                consumed += slice.len();
+                self.dirty = true;
+                self.flush();
             }
-            for (idx, emb) in miss_indices.iter().zip(filled.into_iter()) {
-                self.cache.insert(hashes[*idx].clone(), emb);
-            }
-            self.dirty = true;
         }
 
-        // Assemble results in input order.
         Ok(hashes
             .iter()
             .map(|h| self.cache.get(h).cloned().expect("just inserted"))
             .collect())
+    }
+
+    /// Backward-compatible wrapper: no inter-batch sleep, single final flush.
+    /// Prefer `embed_batch_cached_paced` for rate-limited providers.
+    pub fn embed_batch_cached(
+        &mut self,
+        texts: &[&str],
+        chunk_size: usize,
+    ) -> Result<Vec<Embedding>, EmbeddingError> {
+        self.embed_batch_cached_paced(texts, chunk_size, std::time::Duration::ZERO)
     }
 }

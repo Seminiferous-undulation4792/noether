@@ -107,9 +107,29 @@ impl SemanticIndex {
     /// batch calls of 32 texts each — well within typical rate limits.
     pub fn from_stages_batched(
         stages: Vec<Stage>,
+        cached_provider: cache::CachedEmbeddingProvider,
+        config: IndexConfig,
+        chunk_size: usize,
+    ) -> Result<Self, EmbeddingError> {
+        Self::from_stages_batched_paced(
+            stages,
+            cached_provider,
+            config,
+            chunk_size,
+            std::time::Duration::ZERO,
+        )
+    }
+
+    /// Like `from_stages_batched`, but waits `inter_batch_delay` between
+    /// successive batch calls and commits cache entries to disk after each
+    /// batch. Use this with rate-limited remote providers (e.g. Mistral
+    /// free tier ≈ 1 req/s → pass ~1100 ms).
+    pub fn from_stages_batched_paced(
+        stages: Vec<Stage>,
         mut cached_provider: cache::CachedEmbeddingProvider,
         config: IndexConfig,
         chunk_size: usize,
+        inter_batch_delay: std::time::Duration,
     ) -> Result<Self, EmbeddingError> {
         // Filter active stages once and pre-compute all three texts per stage.
         let active: Vec<&Stage> = stages
@@ -124,7 +144,8 @@ impl SemanticIndex {
             all_texts.push(text::examples_text(s));
         }
         let text_refs: Vec<&str> = all_texts.iter().map(|s| s.as_str()).collect();
-        let embeddings = cached_provider.embed_batch_cached(&text_refs, chunk_size)?;
+        let embeddings =
+            cached_provider.embed_batch_cached_paced(&text_refs, chunk_size, inter_batch_delay)?;
         cached_provider.flush();
 
         // Distribute back into the three sub-indexes in stride 3.
