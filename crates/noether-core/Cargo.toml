@@ -2,6 +2,12 @@
 name = "noether-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Noether core: type system, effects, content-addressed stage schema, Ed25519 signing, stdlib"
 
 [dependencies]
 serde = { workspace = true }

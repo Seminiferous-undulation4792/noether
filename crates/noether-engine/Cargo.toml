@@ -2,6 +2,12 @@
 name = "noether-engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Noether composition engine: Lagrange graph AST, type checker, planner, executor, semantic index, LLM-backed composition agent"
 
 [features]
 # The "native" feature enables OS-dependent modules: Nix execution, HTTP clients,
@@ -11,8 +17,8 @@ default = ["native"]
 native = ["dep:reqwest", "dep:rusqlite", "dep:arrow", "dep:base64"]
 
 [dependencies]
-noether-core = { path = "../noether-core" }
-noether-store = { path = "../noether-store" }
+noether-core = { path = "../noether-core", version = "0.2" }
+noether-store = { path = "../noether-store", version = "0.2" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

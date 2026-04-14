@@ -2,9 +2,15 @@
 name = "noether-store"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Noether stage store: immutable content-addressed registry of stages with lifecycle management"
 
 [dependencies]
-noether-core = { path = "../noether-core" }
+noether-core = { path = "../noether-core", version = "0.2" }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 thiserror    = { workspace = true }

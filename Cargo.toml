@@ -8,8 +8,14 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
+license = "EUPL-1.2"
+repository = "https://github.com/alpibrusl/noether"
+homepage = "https://github.com/alpibrusl/noether"
+description = "Agent-native verified composition platform: typed, content-addressed stages composed into reproducible pipelines"
+keywords = ["agent", "llm", "composition", "pipeline", "workflow"]
+categories = ["development-tools", "command-line-utilities"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
