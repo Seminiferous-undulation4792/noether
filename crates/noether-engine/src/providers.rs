@@ -86,15 +86,25 @@ pub fn build_llm_provider() -> (Box<dyn LlmProvider>, &'static str) {
                 return (Box::new(MockLlmProvider::new("{}")), "mock");
             }
         },
-        "claude-cli" => {
-            // Explicit opt-in: shell out to the local `claude` binary.
+        "claude-cli" | "gemini-cli" | "cursor-cli" | "opencode" => {
+            // Explicit opt-in: shell out to a local subscription CLI.
             // No API key required — the CLI carries the seat's auth.
-            let provider = crate::llm::claude_cli::ClaudeCliProvider::new();
+            use crate::llm::cli_provider::{specs, CliProvider};
+            let spec = match forced.as_str() {
+                "claude-cli" => specs::CLAUDE,
+                "gemini-cli" => specs::GEMINI,
+                "cursor-cli" => specs::CURSOR,
+                "opencode" => specs::OPENCODE,
+                _ => unreachable!(),
+            };
+            let provider = CliProvider::new(spec);
             if provider.available() {
-                return (Box::new(provider), "claude-cli");
+                return (Box::new(provider), spec.provider_slug);
             }
             eprintln!(
-                "Warning: NOETHER_LLM_PROVIDER=claude-cli but `claude` binary not found on PATH."
+                "Warning: NOETHER_LLM_PROVIDER={} but `{}` binary not found on PATH \
+                 (or NOETHER_LLM_SKIP_CLI is set).",
+                forced, spec.binary
             );
         }
         _ => {} // auto-detect below
@@ -113,13 +123,17 @@ pub fn build_llm_provider() -> (Box<dyn LlmProvider>, &'static str) {
     if let Ok((p, name)) = build_vertex_or_mistral_llm() {
         return (p, name);
     }
-    // Claude CLI probe last — we only want to use the ambient seat
-    // when no API key beats it to the draw. This matches the user
-    // expectation that an explicit key wins over an implicit login.
+    // CLI probes last — we only want to use an ambient seat when no
+    // explicit API key beats it to the draw. Order matches caloron's
+    // _llm.py: Claude > Gemini > Cursor > OpenCode. Stops at the
+    // first one that's installed and not suppressed.
     {
-        let provider = crate::llm::claude_cli::ClaudeCliProvider::new();
-        if provider.available() {
-            return (Box::new(provider), "claude-cli");
+        use crate::llm::cli_provider::{specs, CliProvider};
+        for spec in specs::ALL {
+            let provider = CliProvider::new(*spec);
+            if provider.available() {
+                return (Box::new(provider), spec.provider_slug);
+            }
         }
     }
     eprintln!("Warning: No LLM provider configured. Using mock.");
