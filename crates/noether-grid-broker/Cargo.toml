@@ -32,10 +32,17 @@ uuid = { version = "1", features = ["v4"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 clap = { version = "4", features = ["derive", "env"] }
 prometheus = { version = "0.13", default-features = false, features = ["process"] }
-# Postgres-backed durability is deferred to phase 4 — see docs/research/grid.md.
-# The broker is currently in-memory; restart re-enrols workers via heartbeat
-# within ~10s and re-fires any pending sprint-tick on the next cron edge,
-# which is fine for caloron's pilot loop.
+# Postgres-backed durability — opt in with `--features postgres` (off by
+# default so the binary stays small and the pure intra-LAN demo path
+# doesn't need a database). When enabled, pass `--postgres-url
+# postgres://...` and the broker writes through every mutation; reads
+# stay served from in-memory caches that are hydrated on boot.
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4"], optional = true }
+deadpool-postgres = { version = "0.14", features = ["rt_tokio_1"], optional = true }
+
+[features]
+default = []
+postgres = ["dep:tokio-postgres", "dep:deadpool-postgres"]
 
 [dev-dependencies]
 axum = "0.8"

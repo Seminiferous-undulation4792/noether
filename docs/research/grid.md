@@ -226,6 +226,56 @@ dispatch: missing `X-API-Key` returns 401, exhausted budget returns 429.
 When no quotas file is configured, the broker is single-tenant and
 accepts every submission.
 
+## Cost / value model
+
+The pitch in numbers, for sizing whether `noether-grid` is worth deploying
+inside a given org. Variables — fill in for your own company:
+
+| Variable | Symbol | Example |
+|---|---|---|
+| Number of LLM seats your company pays for | `S` | 50 |
+| Average monthly cost per seat (USD) | `C` | 50 |
+| Average utilisation (fraction of monthly quota actually used) | `u` | 0.35 |
+| Fraction of *idle* capacity routable through grid (≈ 0.6–0.8 in practice) | `r` | 0.7 |
+
+Annual reclaimable spend:
+
+```
+reclaim_per_year = S × C × (1 − u) × r × 12
+                 = 50 × 50 × (1 − 0.35) × 0.7 × 12
+                 = $13,650 / year
+```
+
+Sample sizing tiers:
+
+| Org shape | `S` | `C` | `u` | Annual idle | Reclaimable @ r=0.7 |
+|---|---:|---:|---:|---:|---:|
+| Small startup, mostly Cursor + Copilot | 10 | $20 | 0.50 | $1,200 | **$840** |
+| Mid engineering org, Claude Team + Copilot | 50 | $50 | 0.35 | $19,500 | **$13,650** |
+| Large org, mixed enterprise mix | 200 | $80 | 0.40 | $115,200 | **$80,640** |
+
+Operating costs (against the reclaim):
+
+- One always-on broker host (1 vCPU, 512 MB RAM) — typically <$10/mo on
+  any cloud, $0 if it co-tenants a host you already run.
+- Workers run on machines that already exist (laptops, dev workstations,
+  CI runners). Zero additional hardware cost.
+- Postgres optional (phase-3 deferred); when enabled, a t4g.micro-class
+  instance is sufficient.
+
+So the break-even is at **roughly the small-startup tier**. Anything
+mid-org or above, the savings are 100×–1000× the operating cost.
+
+What it does *not* recover:
+
+- Per-seat licence fees themselves (you still pay $C × S — the grid lets
+  you use what you've already paid for, not unsubscribe).
+- LLM calls that hit hard rate limits at the provider side (Anthropic's
+  per-key tokens-per-minute caps, OpenAI's RPM tiers). The grid spreads
+  load across seats but the per-seat ceilings still bind.
+- Identity-tied features (Cursor's chat history, Claude project
+  memory). The grid routes calls; it doesn't migrate context.
+
 ## Open design questions
 
 1. **Worker self-reports its own budget.** For API-key providers, usage

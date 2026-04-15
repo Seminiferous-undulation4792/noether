@@ -49,6 +49,10 @@ pub struct JobEntry {
     #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
     pub dispatched_to: Option<WorkerId>,
+    /// API key that submitted this job — captured at submit time so
+    /// the dispatcher knows whose quota to debit when the job
+    /// completes. Empty when no quotas are configured.
+    pub api_key: String,
 }
 
 /// Per-API-key spending limit + running total. Looked up on every
@@ -156,10 +160,23 @@ pub struct AppState {
     /// `--quotas-file` JSON. Empty map means "no per-agent limits".
     pub quotas: Mutex<HashMap<String, AgentQuota>>,
     pub metrics: Metrics,
+    /// Durability backend. `Persistence::in_memory()` for the
+    /// development / single-LAN demo path; `Persistence::postgres(url)`
+    /// for production where broker restart should not lose the cost
+    /// ledger or the agent-quota spend totals. Reads always come from
+    /// the in-memory caches; postgres is write-through.
+    pub persistence: crate::persistence::Persistence,
 }
 
 impl AppState {
+    /// Convenience constructor for tests / single-tenant in-memory
+    /// deployments. Production calls `with_persistence` directly.
+    #[allow(dead_code)]
     pub fn new(secret: String) -> Self {
+        Self::with_persistence(secret, crate::persistence::Persistence::in_memory())
+    }
+
+    pub fn with_persistence(secret: String, persistence: crate::persistence::Persistence) -> Self {
         Self {
             workers: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
@@ -167,6 +184,28 @@ impl AppState {
             stages: Mutex::new(noether_store::MemoryStore::new()),
             quotas: Mutex::new(HashMap::new()),
             metrics: Metrics::new(),
+            persistence,
+        }
+    }
+
+    /// Hydrate in-memory caches from the persistence layer. Called
+    /// once on broker boot. With the default in-memory persistence
+    /// this is a no-op.
+    pub async fn hydrate_from_persistence(&self) {
+        let snap = self.persistence.hydrate().await;
+        if !snap.workers.is_empty() {
+            let mut workers = self.workers.lock().await;
+            for entry in snap.workers {
+                workers.insert(entry.advertisement.worker_id.clone(), entry);
+            }
+        }
+        if !snap.quota_spend.is_empty() {
+            let mut quotas = self.quotas.lock().await;
+            for (key, spent) in snap.quota_spend {
+                if let Some(q) = quotas.get_mut(&key) {
+                    q.spent_cents = spent;
+                }
+            }
         }
     }
 

@@ -13,6 +13,7 @@ use noether_grid_protocol::{
 use serde_json::json;
 use std::sync::Arc;
 
+use crate::persistence::Mutation;
 use crate::{registry, router, splitter, state::AppState};
 
 pub async fn health(State(state): State<Arc<AppState>>) -> Response {
@@ -28,6 +29,20 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Response {
 
 pub async fn list_workers(State(state): State<Arc<AppState>>) -> Response {
     Json(state.snapshot_workers().await).into_response()
+}
+
+/// `GET /` — single-page dashboard. Embedded at compile time so the
+/// binary stays self-contained (no template-engine dependency, no
+/// asset-discovery at runtime). Polls `/workers` and `/metrics` every
+/// 3 seconds.
+pub async fn dashboard() -> Response {
+    const HTML: &str = include_str!("assets/dashboard.html");
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        HTML,
+    )
+        .into_response()
 }
 
 /// `GET /metrics` — Prometheus text-format export. Public, no auth.
@@ -111,17 +126,20 @@ pub async fn submit_job(
     headers: HeaderMap,
     Json(spec): Json<JobSpec>,
 ) -> Response {
+    // Capture the API key once so we can both gate on quota now and
+    // debit the agent's running spend after dispatch completes.
+    let api_key = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
     // Per-agent quota gate. When the broker has any quotas configured,
     // the X-API-Key header is required AND must have remaining budget
     // larger than the caller's declared budget_cents (or 1 cent if none
     // declared, so quotas always do at least a presence check). Empty
     // quotas map = pass-through (single-tenant deployments).
     {
-        let api_key = headers
-            .get("x-api-key")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
         let quotas = state.quotas.lock().await;
         if !quotas.is_empty() {
             let entry = match quotas.get(&api_key) {
@@ -189,6 +207,7 @@ pub async fn submit_job(
         result: None,
         created_at: Utc::now(),
         dispatched_to: None, // assigned by the splitter
+        api_key: api_key.clone(),
     };
     state.jobs.lock().await.insert(job_id.clone(), job_entry);
 
@@ -432,6 +451,35 @@ async fn dispatch(
             state.metrics.cents_spent_total.inc_by(result.spent_cents);
         }
 
+        // Per-agent quota debit. Find the api_key captured at submit
+        // time, decrement spent_cents in the in-memory quota table,
+        // and write a QuotaSpend mutation through to persistence so
+        // the running total survives broker restart.
+        if result.spent_cents > 0 {
+            let api_key = state
+                .jobs
+                .lock()
+                .await
+                .get(&job_id)
+                .map(|e| e.api_key.clone())
+                .unwrap_or_default();
+            if !api_key.is_empty() {
+                {
+                    let mut quotas = state.quotas.lock().await;
+                    if let Some(q) = quotas.get_mut(&api_key) {
+                        q.spent_cents = q.spent_cents.saturating_add(result.spent_cents);
+                    }
+                }
+                state
+                    .persistence
+                    .record(Mutation::QuotaSpend {
+                        api_key,
+                        cents: result.spent_cents,
+                    })
+                    .await;
+            }
+        }
+
         // Counter increments by terminal status.
         match result.status {
             JobStatus::Ok => state.metrics.jobs_succeeded_total.inc(),
@@ -452,21 +500,40 @@ async fn set_job_status(
     result: Option<JobResult>,
     error: Option<String>,
 ) {
-    let mut jobs = state.jobs.lock().await;
-    if let Some(entry) = jobs.get_mut(job_id) {
-        entry.status = status;
-        if let Some(r) = result {
-            entry.result = Some(r);
-        } else if let Some(msg) = error {
-            entry.result = Some(JobResult {
-                job_id: job_id.clone(),
-                status: entry.status.clone(),
-                output: serde_json::Value::Null,
-                spent_cents: 0,
-                composition_id: None,
-                error: Some(msg),
-                completed_at: Utc::now(),
-            });
+    // Update in-memory state, then snapshot the resulting entry so we
+    // can write it through to persistence without holding the lock
+    // across an await.
+    let snapshot = {
+        let mut jobs = state.jobs.lock().await;
+        let entry = jobs.get_mut(job_id);
+        match entry {
+            Some(entry) => {
+                entry.status = status.clone();
+                if let Some(r) = result {
+                    entry.result = Some(r);
+                } else if let Some(msg) = error {
+                    entry.result = Some(JobResult {
+                        job_id: job_id.clone(),
+                        status: entry.status.clone(),
+                        output: serde_json::Value::Null,
+                        spent_cents: 0,
+                        composition_id: None,
+                        error: Some(msg),
+                        completed_at: Utc::now(),
+                    });
+                }
+                Some(entry.clone())
+            }
+            None => None,
         }
+    };
+    if let Some(entry) = snapshot {
+        state
+            .persistence
+            .record(Mutation::UpsertJob {
+                job_id: job_id.clone(),
+                entry,
+            })
+            .await;
     }
 }

@@ -4,6 +4,7 @@
 //! Phase 1 scope: in-memory state, single-worker-per-graph routing, no
 //! cost accounting beyond simple worker-declared caps.
 
+mod persistence;
 mod registry;
 mod router;
 mod routes;
@@ -42,6 +43,12 @@ struct Cli {
     /// accepting; over-quota submissions return 429.
     #[arg(long, env = "NOETHER_GRID_QUOTAS_FILE")]
     quotas_file: Option<String>,
+    /// Optional postgres URL for durable broker state. Requires the
+    /// binary built with `--features postgres`. When unset (default),
+    /// the broker is in-memory only — restart re-enrols workers via
+    /// heartbeat in ~10s.
+    #[arg(long, env = "NOETHER_GRID_POSTGRES_URL")]
+    postgres_url: Option<String>,
 }
 
 #[tokio::main]
@@ -54,7 +61,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
-    let state = Arc::new(AppState::new(cli.secret.clone()));
+
+    // Pick a persistence backend. Without --postgres-url (or without
+    // the postgres feature compiled in), we run in-memory; with both,
+    // every mutation is also written through to postgres and the
+    // worker-registry + quota-spend rows are hydrated on boot.
+    let persistence = match &cli.postgres_url {
+        #[cfg(feature = "postgres")]
+        Some(url) => match persistence::Persistence::postgres(url).await {
+            Ok(p) => {
+                tracing::info!("postgres persistence enabled at {url}");
+                p
+            }
+            Err(e) => {
+                tracing::warn!("postgres connect failed ({e}); falling back to in-memory state");
+                persistence::Persistence::in_memory()
+            }
+        },
+        #[cfg(not(feature = "postgres"))]
+        Some(_) => {
+            tracing::warn!(
+                "--postgres-url provided but binary built without `postgres` feature; ignoring"
+            );
+            persistence::Persistence::in_memory()
+        }
+        None => persistence::Persistence::in_memory(),
+    };
+
+    let state = Arc::new(AppState::with_persistence(cli.secret.clone(), persistence));
+    state.hydrate_from_persistence().await;
 
     // Seed the broker's stage catalogue from a local JSON store. This
     // is what the graph splitter walks to identify Llm-effect stages
@@ -129,6 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let app = Router::new()
+        .route("/", routing::get(routes::dashboard))
         .route("/health", routing::get(routes::health))
         .route("/workers", routing::get(routes::list_workers))
         .route("/workers", routing::post(routes::enrol_worker))
