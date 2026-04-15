@@ -115,24 +115,80 @@ fn normalize_type_value(v: &serde_json::Value) -> serde_json::Value {
 /// `def execute` is present (no Python parser involved — a regex match on
 /// non-indented lines is sufficient and avoids a runtime dependency).
 fn validate_python_execute(code: &str) -> Result<(), String> {
-    for line in code.lines() {
-        // Skip indented lines (nested defs don't count) and comments.
+    let mut has_execute = false;
+    let mut bad_main: Option<usize> = None;
+    let mut bad_stdin: Option<usize> = None;
+
+    for (lineno, line) in code.lines().enumerate() {
+        // Only consider module-level (column 0) statements.
         if line.starts_with(' ') || line.starts_with('\t') {
             continue;
         }
         let trimmed = line.trim_start();
+
         if trimmed.starts_with("def execute(") || trimmed.starts_with("async def execute(") {
-            return Ok(());
+            has_execute = true;
+        }
+
+        // Reject a top-level `if __name__ == "__main__":` block. The Noether
+        // runtime synthesizes its own `__main__` block in the wrapper to
+        // call `execute(parsed_input)` and emit the JSON result on stdout.
+        // A user `__main__` block — particularly one that reads stdin —
+        // races the runtime's own stdin consumer; whichever runs first
+        // drains the pipe and the other gets an empty input and silent
+        // wrong-results.
+        if bad_main.is_none()
+            && trimmed.starts_with("if __name__")
+            && (trimmed.contains("\"__main__\"") || trimmed.contains("'__main__'"))
+        {
+            bad_main = Some(lineno + 1);
+        }
+
+        // Reject module-level stdin reads — same race condition. A reference
+        // to sys.stdin or a bare input() call here means the user is trying
+        // to do their own I/O, which conflicts with the wrapper.
+        if bad_stdin.is_none()
+            && (trimmed.contains("sys.stdin")
+                || trimmed.starts_with("input(")
+                || trimmed.contains(" input("))
+        {
+            bad_stdin = Some(lineno + 1);
         }
     }
-    Err(
-        "Python stage implementation must define a top-level function \
-         `def execute(input): ...` that takes the parsed input dict and \
-         returns the output dict. Do not read from stdin or print to stdout — \
-         the Noether runtime handles I/O for you. \
-         See docs/guides/custom-stages.md (Python Stage Contract)."
-            .into(),
-    )
+
+    if !has_execute {
+        return Err(
+            "Python stage implementation must define a top-level function \
+             `def execute(input): ...` that takes the parsed input dict and \
+             returns the output dict. Do not read from stdin or print to stdout — \
+             the Noether runtime handles I/O for you. \
+             See docs/guides/custom-stages.md (Python Stage Contract)."
+                .into(),
+        );
+    }
+
+    if let Some(line) = bad_main {
+        return Err(format!(
+            "Python stage at line {line} has a top-level \
+             `if __name__ == \"__main__\":` block. The Noether runtime \
+             synthesizes its own __main__ block to call execute(input) — \
+             a user-level one races the runtime's stdin consumer and \
+             produces silent wrong results. Move that code into the body \
+             of `def execute(input):` instead."
+        ));
+    }
+
+    if let Some(line) = bad_stdin {
+        return Err(format!(
+            "Python stage at line {line} reads stdin or calls input() \
+             at module level. The Noether runtime parses stdin for you \
+             and passes the result to `def execute(input)`. Direct stdin \
+             reads race the runtime and drain the pipe. Use the `input` \
+             argument to your execute function instead."
+        ));
+    }
+
+    Ok(())
 }
 
 /// Human-friendly spec format for `noether stage add` — parsed from JSON,
@@ -1115,6 +1171,43 @@ mod tests {
         // A nested def inside a class shouldn't satisfy the contract.
         let bad = "class Foo:\n    def execute(self, x):\n        return x";
         assert!(validate_python_execute(bad).is_err());
+    }
+
+    #[test]
+    fn validate_python_rejects_user_main_block() {
+        // The Noether wrapper synthesizes its own __main__ block; a user
+        // one races the runtime's stdin consumer.
+        let bad = "import sys\n\ndef execute(input):\n    return input\n\nif __name__ == \"__main__\":\n    print(execute({}))";
+        let err = validate_python_execute(bad).unwrap_err();
+        assert!(err.contains("__main__"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_python_accepts_main_inside_string_or_comment() {
+        // Mentions of __main__ in strings or comments should not trip the
+        // detector — the check looks for an actual `if __name__ == "__main__":` line.
+        let ok = "def execute(input):\n    return {'doc': '__main__ pattern not used'}\n";
+        assert!(validate_python_execute(ok).is_ok());
+    }
+
+    #[test]
+    fn validate_python_rejects_module_level_stdin_read() {
+        let bad = "import sys, json\n\n_data = json.load(sys.stdin)\n\ndef execute(input):\n    return _data\n";
+        let err = validate_python_execute(bad).unwrap_err();
+        assert!(
+            err.contains("stdin") || err.contains("input("),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_python_rejects_module_level_input_call() {
+        let bad = "name = input(\"name? \")\n\ndef execute(input):\n    return name\n";
+        let err = validate_python_execute(bad).unwrap_err();
+        assert!(
+            err.contains("input(") || err.contains("stdin"),
+            "got: {err}"
+        );
     }
 
     #[test]
