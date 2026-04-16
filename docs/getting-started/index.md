@@ -122,20 +122,38 @@ For problems where you don't want to hand-author the graph, let the
 composition agent search the registry and wire stages together:
 
 ```bash
-# Pick one provider.
+# Option A — an API key in env (metered per-call).
 export MISTRAL_API_KEY=...          # api.mistral.ai
 # or: export OPENAI_API_KEY=sk-...
 # or: export ANTHROPIC_API_KEY=sk-ant-...
 # or: export VERTEX_AI_PROJECT=... VERTEX_AI_MODEL=gemini-2.5-flash
+
+# Option B — a subscription CLI you're already signed into. Zero
+# API-key setup; uses the seat you already pay for.
+export NOETHER_LLM_PROVIDER=claude-cli   # or gemini-cli, cursor-cli, opencode
 
 noether compose "convert text to uppercase and get its length"
 noether compose --dry-run "sort a list and take the top 3"
 noether compose --verbose "parse CSV and count rows"  # show reasoning
 ```
 
+If `claude` or `gemini` is already on your `$PATH` with an active
+session, Noether auto-detects it when no API key is set — no env var
+needed.
+
 The agent searches the semantic index for top-20 candidates, builds a
 Lagrange graph, type-checks it, retries on failure, and hands you back a
 structured ACLI response.
+
+## 5 — Pool LLM capacity across machines (optional)
+
+If you have a team of developers each with their own Claude Pro /
+Gemini Advanced / Cursor seat, `noether-grid` lets a broker route
+LLM-bearing stages to whichever workstation has free capacity.
+Pure stages still run locally; only the `Effect::Llm` nodes dispatch.
+
+See the **[noether-grid-broker README](https://github.com/alpibrusl/noether/blob/main/crates/noether-grid-broker/README.md)**
+for the per-role deploy walkthrough.
 
 ## Next
 
@@ -147,3 +165,5 @@ structured ACLI response.
   scheduling, self-hosting.
 - **[LLM-Powered Compose](../guides/llm-compose.md)** — how `noether
   compose` constructs graphs, debugging tips.
+- **[Grid — Subscription Pooling](../research/grid.md)** — design of
+  `noether-grid`, when to deploy it, multi-machine cost model.

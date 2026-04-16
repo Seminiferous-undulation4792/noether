@@ -47,6 +47,13 @@ noether compose "parse CSV data and count the rows"
 
     [→ Semantic search](guides/semantic-search.md)
 
+-   :material-server-network: **Pool LLM capacity (v0.4)**
+
+    `noether-grid` routes `Effect::Llm` stages across a team's idle
+    Claude / Gemini / Cursor subscriptions. Pure work stays local.
+
+    [→ Grid design](research/grid.md)
+
 </div>
 
 ---

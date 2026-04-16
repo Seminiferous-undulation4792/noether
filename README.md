@@ -82,12 +82,21 @@ noether run --dry-run graph.json              # type-check only
 echo '{"csv": "a,b\n1,2\n3,4"}' | noether run graph.json
 ```
 
-For the LLM-powered path, set one provider and let the agent find and wire stages for you:
+For the LLM-powered path, Noether picks the first available of:
 
 ```bash
+# 1. An API key in env (cheapest to script, metered per-call).
 export MISTRAL_API_KEY=...   # or VERTEX_AI_PROJECT, OPENAI_API_KEY, ANTHROPIC_API_KEY
+
+# 2. Or a subscription CLI you're already signed into (zero API-key setup,
+#    uses your Claude Pro / Gemini Advanced / Cursor seat directly).
+export NOETHER_LLM_PROVIDER=claude-cli   # or gemini-cli, cursor-cli, opencode
+
 noether compose "convert text to uppercase and get its length"
 ```
+
+If you already have `claude` or `gemini` on `$PATH` with an active
+session, no extra config is needed — auto-detection picks them up.
 
 ---
 
@@ -177,7 +186,7 @@ Details: **[CHANGELOG →](./docs/changelog.md)**
 
 ## The hosted registry
 
-`registry.alpibru.com` hosts the Noether stdlib plus ~400 curated community stages. Read access is open; writes require an API key.
+`registry.alpibru.com` hosts the Noether stdlib plus ~486 curated community stages. Read access is open; writes require an API key.
 
 ```bash
 curl https://registry.alpibru.com/health
@@ -219,7 +228,7 @@ Noether is designed to be called *by* agents, not to contain them. The compositi
 ```bash
 # An agent calls Noether and gets structured ACLI output.
 noether compose "extract entities from these documents" --input '...'
-# { "ok": true, "command": "compose", "data": {...}, "meta": {"version": "0.2.1"} }
+# { "ok": true, "command": "compose", "data": {...}, "meta": {"version": "0.4.0"} }
 ```
 
 ---
