@@ -1,8 +1,8 @@
 # Noether
 
-**Agent-native verified composition platform.**
+**Typed, content-addressed pipelines — reproducible by construction, LLM-assisted by option.**
 
-Typed, content-addressed stages · structural subtyping · hermetic execution · reproducible pipelines by design.
+Decompose computation into stages with structural type signatures. Compose them into graphs the type system guarantees fit. Execute in a hermetic sandbox. Replay any run from its composition hash.
 
 ```bash
 cargo install noether-cli
@@ -19,38 +19,49 @@ noether compose "parse CSV data and count the rows"
 
 <div class="grid cards" markdown>
 
--   :material-lightning-bolt: **Compose, don't synthesise**
-
-    From a plain-English problem to a type-checked executable graph in
-    seconds. The LLM picks stages; the type checker guarantees they fit.
-
-    [→ `noether compose`](guides/llm-compose.md)
-
 -   :material-lock: **Reproducible by construction**
 
     Every stage has a SHA-256 content hash. Same hash, same computation,
-    on any machine, forever.
+    on any machine, forever. Replay any past run from its composition ID.
 
     [→ Stage identity](architecture/stage-identity.md)
 
 -   :material-graph: **Structural typing**
 
     `Record { a, b, c }` is a subtype of `Record { a, b }`. Composition
-    correctness is a theorem, not a test.
+    correctness is a theorem, not a test. The type checker catches
+    plumbing mistakes before execution.
 
     [→ Type system](architecture/type-system.md)
 
+-   :material-tag-multiple: **Effects as first-class**
+
+    Every stage declares what it does: `Pure`, `Network`, `Llm`, `Cost`,
+    `Process`, `Fallible`. Budget, routing, and policy decisions ride
+    on effects instead of being re-derived at runtime.
+
+    [→ Effects](architecture/type-system.md)
+
+-   :material-lightning-bolt: **LLM-assisted authoring (optional)**
+
+    From a plain-English problem to a type-checked executable graph in
+    seconds — when you want it. Stages run without any LLM involvement
+    unless they explicitly declare `Effect::Llm`.
+
+    [→ `noether compose`](guides/llm-compose.md)
+
 -   :material-magnify: **Semantic search**
 
-    Agents discover stages by meaning, not by name. Three-index fusion
-    across signature, description, examples.
+    Discover stages by meaning, not by name. Three-index fusion across
+    signature, description, examples.
 
     [→ Semantic search](guides/semantic-search.md)
 
--   :material-server-network: **Pool LLM capacity (v0.4)**
+-   :material-server-network: **Distributed execution (v0.4)**
 
-    `noether-grid` routes `Effect::Llm` stages across a team's idle
-    Claude / Gemini / Cursor subscriptions. Pure work stays local.
+    `noether-grid` routes stages by declared capability — LLM-bearing
+    nodes dispatch to workers with matching access (API keys,
+    self-hosted models, or same-org CLI auth), pure work stays local.
 
     [→ Grid design](research/grid.md)
 

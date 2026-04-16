@@ -1,8 +1,8 @@
 # Noether
 
-**Agent-native verified composition platform.**
+**Typed, content-addressed pipelines — reproducible by construction, LLM-assisted by option.**
 
-Typed, content-addressed stages · structural subtyping · hermetic execution · reproducible pipelines by design.
+Decompose computation into stages with structural type signatures. Compose them into graphs the type system guarantees fit. Execute in a hermetic sandbox. Replay any run from its composition hash.
 
 [![Crates.io](https://img.shields.io/crates/v/noether-cli.svg)](https://crates.io/crates/noether-cli)
 [![Docs](https://img.shields.io/badge/docs-noether.alpibru.com-blue.svg)](https://alpibrusl.github.io/noether/)
@@ -23,7 +23,7 @@ noether compose "parse CSV data and count the rows"
 
 ## What it is
 
-Noether is infrastructure for agents that need to **compose and verify** computation. A **stage** is an immutable, content-addressed unit with a structural type signature:
+A **stage** is an immutable, content-addressed unit of computation with a structural type signature:
 
 ```
 stage: { input: T } → { output: U }
@@ -32,7 +32,9 @@ identity: SHA-256(signature)   ← not a name, not a version, a hash
 
 Two stages with the same hash are provably the same computation — across machines, across repos, forever. The **composition engine** type-checks every edge of a graph before executing it, using structural subtyping (`Record { a, b, c }` is a subtype of `Record { a, b }`).
 
-Noether is **not** a workflow orchestrator, AI agent framework, or pipeline runner. Agents use Noether; they are not written in it.
+Good fit: **typed ETL pipelines, analytics DAGs, data-normalisation across providers, LLM-augmented decisioning, anything where "the same inputs should always produce the same outputs" is a correctness requirement**. Effects are first-class (`Pure`, `Network`, `Llm`, `Cost`, `Process`, etc.) so budget, routing, and policy decisions ride on them.
+
+Noether is **not** a workflow orchestrator, request-response framework, or AI agent runtime. Agents and services use Noether; they are not written in it.
 
 ---
 
@@ -158,17 +160,19 @@ Full operator reference: **[Composition Graphs →](./docs/guides/composition-gr
 
 ## What's new in v0.4
 
-- **`noether-grid`** — pool LLM capacity across machines. A broker
-  splits composition graphs so `Effect::Llm` stages dispatch to a
-  worker with matching subscription / API credentials while pure
-  stages execute locally. Auto-discovers Claude Desktop, Gemini CLI,
-  Cursor Agent, and OpenCode on each worker's `$PATH`. See
+- **`noether-grid`** — distributed execution for composition graphs.
+  A broker splits a graph so `Effect::Llm` (or any other effect the
+  caller can't satisfy locally) dispatches to a worker that can,
+  while pure stages execute locally. Workers advertise whatever LLM
+  access they're configured with — API keys, self-hosted models, or
+  same-org CLI auth. See
   **[broker README →](./crates/noether-grid-broker/README.md)** and
   **[design →](./docs/research/grid.md)**.
-- **Subscription-CLI providers in `noether-engine`** — `NOETHER_LLM_PROVIDER=claude-cli`
-  (or `gemini-cli`, `cursor-cli`, `opencode`) shells out to a local
-  subscription CLI instead of an API key. Useful on workstations
-  that already have a signed-in CLI.
+- **Pluggable LLM providers in `noether-engine`** — `NOETHER_LLM_PROVIDER`
+  selects between API-key backends (Anthropic, OpenAI, Mistral,
+  Vertex) and local CLI backends (`claude-cli`, `gemini-cli`,
+  `cursor-cli`, `opencode`) for workstations with an active
+  developer session. Auto-detection picks the first available.
 
 ## What's new in v0.2
 
@@ -221,12 +225,12 @@ Full walk-through: **[Architecture Overview →](./docs/architecture/overview.md
 
 ---
 
-## Relationship with agents
+## Calling from agents, services, and scripts
 
-Noether is designed to be called *by* agents, not to contain them. The composition graph travels as compact JSON — only the final LLM stages consume tokens. In our benchmarks this is a 60–80% token reduction vs. naïve LLM chaining.
+Noether is designed to be *called*, not built-into. Any process that can shell out to a CLI or hit an HTTP endpoint can use it — agents, CI jobs, cron, FastAPI services, Python scripts. The composition graph travels as compact JSON; only stages that declare `Effect::Llm` consume tokens. For agent callers specifically, this is a 60–80% token reduction vs. naïve LLM chaining (most plumbing becomes type-checked graph structure instead of prompt text).
 
 ```bash
-# An agent calls Noether and gets structured ACLI output.
+# Structured ACLI output — parseable from any language.
 noether compose "extract entities from these documents" --input '...'
 # { "ok": true, "command": "compose", "data": {...}, "meta": {"version": "0.4.0"} }
 ```

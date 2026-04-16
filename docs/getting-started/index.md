@@ -145,12 +145,15 @@ The agent searches the semantic index for top-20 candidates, builds a
 Lagrange graph, type-checks it, retries on failure, and hands you back a
 structured ACLI response.
 
-## 5 — Pool LLM capacity across machines (optional)
+## 5 — Distributed execution (optional)
 
-If you have a team of developers each with their own Claude Pro /
-Gemini Advanced / Cursor seat, `noether-grid` lets a broker route
-LLM-bearing stages to whichever workstation has free capacity.
-Pure stages still run locally; only the `Effect::Llm` nodes dispatch.
+For graphs that outgrow one machine — or when you want to keep heavy
+`Effect::Llm` work off your development host — `noether-grid` splits a
+graph across workers. Each worker advertises whatever capabilities it's
+configured with (API keys to any provider, self-hosted open models, or
+same-organisation CLI auth); the broker dispatches each stage to a
+matching worker. Pure stages execute locally; only effect-bearing nodes
+cross the network.
 
 See the **[noether-grid-broker README](https://github.com/alpibrusl/noether/blob/main/crates/noether-grid-broker/README.md)**
 for the per-role deploy walkthrough.
