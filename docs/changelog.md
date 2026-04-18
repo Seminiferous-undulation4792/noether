@@ -14,6 +14,76 @@ uses [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.0] — 2026-04-18
+
+**Breaking release.** M1 (canonical composition form) and M2 (stage
+identity split, graph-level pinning, declarative properties, resolver
+pass, verify CLI) land together. **Composition IDs and Stage IDs change
+format** — v0.4.x IDs do not round-trip. Regeneration via `noether
+compose` or `noether stage add` is required; registries must be rebuilt.
+
+### Breaking
+
+- **Composition ID format changed.** `compute_composition_id` now hashes
+  the pre-resolution canonical form of the graph (flattened Sequentials,
+  collapsed singletons, collapsed Retries, etc.) via RFC 8785 JCS, not
+  the raw JSON. See [`docs/architecture/semantics.md`](./architecture/semantics.md)
+  for the rules and property laws.
+- **Stage ID hash now includes `name`.** `compute_stage_id(name, &sig)`
+  nests `compute_signature_id`: changing any signature-level field
+  (including name) changes the StageId; changing only the
+  implementation_hash changes StageId but not SignatureId. Old IDs
+  computed from StageSignature alone no longer resolve.
+- **`canonical_id` renamed to `signature_id`** at the Rust API and
+  JSON field level. The old field name is accepted as a deserialisation
+  alias through v0.6.x; the Rust `CanonicalId` / `compute_canonical_id`
+  symbols are deprecated and removed in v0.7.0.
+- **`CheckPropertiesError`** replaces the old
+  `Result<(), Vec<(usize, PropertyViolation)>>` return of
+  `Stage::check_properties`. A stage with properties but no examples
+  now errors (`NoExamples`) rather than passing vacuously.
+
+### Added
+
+- **Declarative properties** on stage specs
+  (`crates/noether-core/src/stage/property.rs`). `Property::SetMember`
+  and `Property::Range` variants, plus `Property::Unknown` for forward
+  compatibility. `noether stage verify --properties` runs every
+  declared property against every example.
+- **Per-node graph pinning.** `CompositionNode::Stage` gains
+  `pinning: Pinning`:
+  - `"signature"` (default, omitted in JSON) — resolves `id` as a
+    `SignatureId` to the currently Active implementation.
+  - `"both"` — resolves `id` as an `ImplementationId`, bit-exact.
+  The resolver falls back from signature → Active implementation
+  lookup only when the fallback's lifecycle is Active (deprecated
+  stages don't silently run).
+- **Resolver pass** (`lagrange::resolve_pinning`). Rewrites a graph
+  so every `Stage.id` holds a concrete ImplementationId; downstream
+  passes (checker, planner, budget, runner) keep using `store.get`.
+  `noether run` calls this between prefix resolution and
+  deprecation-chain resolution. Emits a `MultiActiveWarning` when
+  more than one Active implementation shares a signature.
+- **`noether stage verify`** — signatures-and/or-properties verifier.
+  Flags: `--signatures` (Ed25519 only), `--properties` (declarative
+  only), neither (both). Reports structured ACLI output; exits 1 and
+  emits `acli_error` on failure so agents can't miss violations.
+- **`STABILITY.md`** — the 1.x stability contract. Covers signature
+  ID, implementation ID, composition ID, operator semantics, stdlib
+  freeze, graph JSON schema, registry API, MSRV (1.83 stable),
+  public crate surface, on-disk formats, and env-var contract.
+
+### Fixed (from M1 review pass)
+
+- Nested `Retry` collapse is now idempotent at arbitrary depth — the
+  combined result re-feeds through the local canonical rewrites.
+- `L6`/`L7` proptests (`Parallel` / `Let` permutation invariance)
+  now actually test permutation: they build JSON with shuffled key
+  order and assert equal composition IDs. The previous BTreeMap-only
+  version was tautological.
+- Semantics doc now distinguishes laws tested in M1 (`L1, L4-L7,
+  L9-L13`) from laws deferred to later milestones (`L2, L3, L8`).
+
 ## [0.4.1] — 2026-04-16
 
 DX release: two ergonomic frictions that surfaced while building a
