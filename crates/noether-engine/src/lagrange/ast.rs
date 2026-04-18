@@ -3,17 +3,72 @@ use noether_core::types::NType;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// How a `Stage` reference resolves to a concrete stage in the store.
+///
+/// Per M2 (v0.6.0), every graph node that names a stage declares its
+/// pinning. Default is [`Pinning::Signature`], which picks up
+/// implementation bugfixes automatically. [`Pinning::Both`] is the
+/// bit-reproducible option — the resolver refuses to substitute a
+/// different implementation even if the stored one has been deprecated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Pinning {
+    /// Interpret the node's `id` as a [`noether_core::stage::SignatureId`]
+    /// and resolve to whichever stage is currently Active with that
+    /// signature. Default — matches the v0.6.0 recommendation in
+    /// `STABILITY.md`.
+    #[default]
+    Signature,
+    /// Interpret the node's `id` as an implementation-inclusive
+    /// [`StageId`] and require an exact match. The resolver refuses to
+    /// fall back to any other implementation of the same signature.
+    Both,
+}
+
+impl Pinning {
+    /// Helper for `#[serde(skip_serializing_if = ...)]` — omit the field
+    /// from JSON when the value is the default (`Signature`).
+    pub fn is_signature(&self) -> bool {
+        matches!(self, Pinning::Signature)
+    }
+}
+
 /// A composition graph node. The core AST for Noether's composition language.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op")]
 pub enum CompositionNode {
-    /// Leaf node: reference to a stage by its content hash.
+    /// Leaf node: reference to a stage in the store.
     ///
-    /// The optional `config` provides static parameter values merged with
-    /// the pipeline input before the stage executes. This separates data
-    /// flow (from the pipeline) from configuration (from the graph).
+    /// The `id` field is interpreted according to `pinning`:
+    /// - [`Pinning::Signature`] (default): `id` is a signature-level
+    ///   hash (`SignatureId`) and the resolver returns the currently
+    ///   Active implementation with that signature.
+    /// - [`Pinning::Both`]: `id` is an implementation-inclusive hash
+    ///   (`ImplementationId` / `StageId`) and the resolver requires an
+    ///   exact match. No fallback.
+    ///
+    /// The optional `config` provides static parameter values merged
+    /// with the pipeline input before the stage executes.
+    ///
+    /// Use [`CompositionNode::stage`] to construct a node with default
+    /// pinning; use the struct literal only when you need a non-default
+    /// pinning or a config.
+    ///
+    /// # Known gap in M2 (v0.6.0)
+    ///
+    /// [`resolve_stage_ref`] is only wired into the type checker and
+    /// executor runner. Other passes (effect inference, Ed25519
+    /// verify, planner cost/parallel grouping, budget, grid-broker
+    /// splitter) still look up by [`StageId`] directly, which means
+    /// a `Pinning::Signature` node may type-check but fail at those
+    /// downstream passes. The resolver-normalisation pass lands as a
+    /// follow-up: it rewrites graph nodes to implementation IDs before
+    /// any downstream pass runs, so the rest of the engine keeps
+    /// operating on concrete implementation hashes.
     Stage {
         id: StageId,
+        #[serde(default, skip_serializing_if = "Pinning::is_signature")]
+        pinning: Pinning,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config: Option<BTreeMap<String, serde_json::Value>>,
     },
@@ -97,6 +152,86 @@ pub enum CompositionNode {
     },
 }
 
+impl CompositionNode {
+    /// Build a `Stage` node with default pinning (`Signature`) and no
+    /// config. Use this in place of the struct literal when you don't
+    /// need to set pinning or config explicitly.
+    pub fn stage(id: impl Into<String>) -> Self {
+        Self::Stage {
+            id: StageId(id.into()),
+            pinning: Pinning::Signature,
+            config: None,
+        }
+    }
+
+    /// Build a `Stage` node with an explicit `Both` pinning — the
+    /// resolver will require the exact implementation named by `id`.
+    pub fn stage_pinned(id: impl Into<String>) -> Self {
+        Self::Stage {
+            id: StageId(id.into()),
+            pinning: Pinning::Both,
+            config: None,
+        }
+    }
+}
+
+/// Resolve a `CompositionNode::Stage` reference to a concrete stage
+/// in the store, respecting the node's pinning.
+///
+/// - [`Pinning::Signature`]: `id` is interpreted as a
+///   [`noether_core::stage::SignatureId`]; the resolver returns the
+///   store's Active implementation for that signature.
+///   - If no Active match is found, the resolver **falls back** to
+///     `store.get(id)` *and* requires the looked-up stage to be
+///     Active. This fallback catches the case where a name- or
+///     prefix-resolver pass has already rewritten `id` into an
+///     implementation hash. It deliberately does NOT run Deprecated
+///     or Tombstone implementations — per STABILITY.md, deprecated
+///     stages should emit a warning when invoked, which a silent
+///     resolver cannot do. The right place for "run deprecated with
+///     a warning" is the CLI layer, not this helper.
+/// - [`Pinning::Both`]: `id` is an implementation-inclusive
+///   [`StageId`]; the resolver requires an exact `store.get` match.
+///   No fallback to signature-level resolution.
+///
+/// # Known gap (tracked as M2 follow-up)
+///
+/// In M2 only the type checker and runtime executor use this helper.
+/// The effect-inference walk, `--allow-effects` enforcement, Ed25519
+/// verification pass, cost summary, planner parallel-grouping, budget
+/// collection, and grid-broker splitter all still call `store.get(id)`
+/// directly — which means a `Pinning::Signature` node can't resolve
+/// through those paths yet. The follow-up "resolver normalisation
+/// pass" rewrites graph nodes to their resolved implementation IDs
+/// before anything else runs, so the rest of the engine keeps
+/// operating on concrete implementation hashes.
+pub fn resolve_stage_ref<'a, S>(
+    id: &StageId,
+    pinning: Pinning,
+    store: &'a S,
+) -> Option<&'a noether_core::stage::Stage>
+where
+    S: noether_store::StageStore + ?Sized,
+{
+    use noether_core::stage::{SignatureId, StageLifecycle};
+    match pinning {
+        Pinning::Signature => {
+            let sig = SignatureId(id.0.clone());
+            if let Some(stage) = store.get_by_signature(&sig) {
+                return Some(stage);
+            }
+            // Fallback for mixed legacy flows. Must be Active; a
+            // silent resolver must not execute a deprecated or
+            // tombstoned stage on behalf of the user.
+            match store.get(id).ok().flatten() {
+                Some(s) if matches!(s.lifecycle, StageLifecycle::Active) => Some(s),
+                _ => None,
+            }
+        }
+        Pinning::Both => store.get(id).ok().flatten(),
+    }
+}
+
 /// A complete composition graph with metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompositionGraph {
@@ -178,6 +313,7 @@ mod tests {
     fn stage(id: &str) -> CompositionNode {
         CompositionNode::Stage {
             id: StageId(id.into()),
+            pinning: Pinning::Signature,
             config: None,
         }
     }
@@ -289,6 +425,61 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(&node).unwrap();
         assert_eq!(v["op"], json!("Stage"));
         assert_eq!(v["id"], json!("abc123"));
+    }
+
+    #[test]
+    fn default_pinning_omitted_from_json() {
+        // A Stage node with the default Signature pinning should not
+        // emit `"pinning"` in the JSON — keeps the wire format small
+        // and backwards-compatible with readers that only expect `id`.
+        let node = stage("abc123");
+        let v: serde_json::Value = serde_json::to_value(&node).unwrap();
+        assert!(
+            v.get("pinning").is_none(),
+            "default Signature pinning should be omitted from JSON, got: {v}"
+        );
+    }
+
+    #[test]
+    fn both_pinning_serialises_explicitly() {
+        let node = CompositionNode::stage_pinned("impl_abc");
+        let v: serde_json::Value = serde_json::to_value(&node).unwrap();
+        assert_eq!(v["pinning"], json!("both"));
+    }
+
+    #[test]
+    fn legacy_graph_without_pinning_deserialises() {
+        // v0.5.x graphs had only `{"op": "Stage", "id": "..."}`. The
+        // new `pinning` field defaults to Signature when the legacy
+        // JSON is loaded.
+        let legacy = json!({
+            "op": "Stage",
+            "id": "legacy_hash",
+        });
+        let parsed: CompositionNode = serde_json::from_value(legacy).unwrap();
+        match parsed {
+            CompositionNode::Stage { id, pinning, .. } => {
+                assert_eq!(id.0, "legacy_hash");
+                assert_eq!(pinning, Pinning::Signature);
+            }
+            _ => panic!("expected Stage variant"),
+        }
+    }
+
+    #[test]
+    fn explicit_both_pinning_deserialises() {
+        let pinned = json!({
+            "op": "Stage",
+            "id": "impl_xyz",
+            "pinning": "both",
+        });
+        let parsed: CompositionNode = serde_json::from_value(pinned).unwrap();
+        match parsed {
+            CompositionNode::Stage { pinning, .. } => {
+                assert_eq!(pinning, Pinning::Both);
+            }
+            _ => panic!("expected Stage variant"),
+        }
     }
 
     #[test]
