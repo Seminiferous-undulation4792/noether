@@ -170,7 +170,7 @@ pub async fn submit_job(
     state.metrics.jobs_submitted_total.inc();
     // Parse the graph. Invalid JSON → 400 immediately; the graph wouldn't
     // run anyway and we want a clear error before any worker bookkeeping.
-    let graph = match noether_engine::lagrange::parse_graph(&spec.graph.to_string()) {
+    let mut graph = match noether_engine::lagrange::parse_graph(&spec.graph.to_string()) {
         Ok(g) => g,
         Err(e) => {
             return (
@@ -181,13 +181,65 @@ pub async fn submit_job(
         }
     };
 
-    // Look up the graph's required LLM models from the broker's stage
-    // catalogue. If the catalogue doesn't know a stage, the splitter
-    // leaves it alone — no model requirement is contributed.
+    // Resolve pinning. The splitter and model-inference walks both
+    // look stages up by implementation ID; signature-pinned refs
+    // would silently be left alone. Run this once up front so the
+    // rest of the pipeline sees concrete impls. Errors (unknown
+    // signature, missing impl) are client-facing 400s, not 5xx.
     let stages_snapshot = {
         let lock = state.stages.lock().await;
         clone_store(&lock)
     };
+    if let Err(e) = noether_engine::lagrange::resolve_pinning(&mut graph.root, &stages_snapshot) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("pinning resolution: {e}")})),
+        )
+            .into_response();
+    }
+
+    // Follow deprecation chains too. Without this pass, a
+    // broker-submitted graph referencing a `Deprecated { successor_id }`
+    // stage would resolve pinning fine and then dispatch to the
+    // now-retired implementation on a worker, rather than being
+    // silently forwarded to the successor the way the CLI does. The
+    // broker logs through `tracing` (not stderr), so we surface
+    // rewrites and anomalies as structured events instead of
+    // reusing the CLI's `resolve_and_emit_diagnostics` helper.
+    let dep_report =
+        noether_engine::lagrange::resolve_deprecated_stages(&mut graph.root, &stages_snapshot);
+    for rw in &dep_report.rewrites {
+        tracing::info!(
+            from = %rw.from.0,
+            to = %rw.to.0,
+            "resolved deprecated stage to successor"
+        );
+    }
+    for event in &dep_report.events {
+        match event {
+            noether_engine::lagrange::ChainEvent::CycleDetected { stage } => {
+                tracing::warn!(
+                    stage_id = %stage.0,
+                    "deprecation cycle detected — store has corrupt \
+                     deprecation data; graph dispatched against the \
+                     last distinct id before the cycle"
+                );
+            }
+            noether_engine::lagrange::ChainEvent::MaxHopsExceeded { stage } => {
+                tracing::warn!(
+                    stage_id = %stage.0,
+                    cap = noether_engine::lagrange::MAX_DEPRECATION_HOPS,
+                    "deprecation chain exceeded hop cap — dispatched \
+                     against the truncated id; chain should be \
+                     flattened in the store"
+                );
+            }
+        }
+    }
+
+    // Look up the graph's required LLM models from the broker's stage
+    // catalogue. If the catalogue doesn't know a stage, the splitter
+    // leaves it alone — no model requirement is contributed.
     let models = splitter::required_llm_models(&graph.root, &stages_snapshot);
 
     // Pre-flight pool capacity. With graph splitting we don't pick a

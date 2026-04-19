@@ -1,3 +1,4 @@
+use super::resolver_utils::resolve_and_emit_diagnostics;
 use crate::output::{acli_error, acli_error_hints, acli_ok, acli_ok_cached};
 use acli::output::CacheMeta;
 use noether_engine::agent::SynthesisResult;
@@ -46,6 +47,28 @@ pub fn cmd_compose(
                 "Cache hit (model: {}, composed: {}s ago). Use --force to recompose.",
                 cached.model, age_secs,
             );
+            // Composition identity is taken from the **pre-resolution**
+            // graph — the M1 "canonical form is identity" contract.
+            // Compute the id now, then let resolve_and_emit_diagnostics
+            // rewrite the graph for downstream passes.
+            let mut cached_graph = cached.graph.clone();
+            let composition_id = match compute_composition_id(&cached_graph) {
+                Ok(id) => id,
+                Err(e) => {
+                    // Cached graph somehow broke hashing. Loud failure
+                    // beats an "unknown" envelope that gives the
+                    // operator no breadcrumb to the cause.
+                    eprintln!(
+                        "{}",
+                        acli_error(&format!("failed to hash cached composition graph: {e}"))
+                    );
+                    std::process::exit(1);
+                }
+            };
+            if let Err(msg) = resolve_and_emit_diagnostics(&mut cached_graph, store) {
+                eprintln!("{}", acli_error(&msg));
+                std::process::exit(1);
+            }
             emit_result(
                 store,
                 EmitCtx {
@@ -56,7 +79,8 @@ pub fn cmd_compose(
                     cache_age_secs: age_secs,
                     attempts: 0,
                     synthesized: &[],
-                    graph: &cached.graph.clone(),
+                    graph: &cached_graph,
+                    composition_id,
                     policy: opts.policy,
                     budget_cents: opts.budget_cents,
                 },
@@ -86,7 +110,23 @@ pub fn cmd_compose(
         cache.insert(problem, result.graph.clone(), opts.model);
     }
 
-    let (graph, synthesized, attempts) = (result.graph, result.synthesized, result.attempts);
+    let (mut graph, synthesized, attempts) = (result.graph, result.synthesized, result.attempts);
+    // Composition identity from the pre-resolution graph — see the
+    // cached branch above for the contract rationale.
+    let composition_id = match compute_composition_id(&graph) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                acli_error(&format!("failed to hash composition graph: {e}"))
+            );
+            std::process::exit(1);
+        }
+    };
+    if let Err(msg) = resolve_and_emit_diagnostics(&mut graph, store) {
+        eprintln!("{}", acli_error(&msg));
+        std::process::exit(1);
+    }
     emit_result(
         store,
         EmitCtx {
@@ -98,6 +138,7 @@ pub fn cmd_compose(
             attempts,
             synthesized: &synthesized,
             graph: &graph,
+            composition_id,
             policy: opts.policy,
             budget_cents: opts.budget_cents,
         },
@@ -115,12 +156,27 @@ struct EmitCtx<'a> {
     attempts: u32,
     synthesized: &'a [SynthesisResult],
     graph: &'a CompositionGraph,
+    /// Composition identity computed from the **pre-resolution** graph.
+    /// Must be supplied by the caller — hashing `ctx.graph` here would
+    /// see the already-resolved form and violate the M1/#28 contract
+    /// that the same source graph produces a stable id across days.
+    composition_id: String,
     policy: &'a CapabilityPolicy,
     budget_cents: Option<u64>,
 }
 
 fn emit_result(store: &mut dyn StageStore, ctx: EmitCtx<'_>) {
-    let composition_id = compute_composition_id(ctx.graph).unwrap_or_else(|_| "unknown".into());
+    // Loud failure when a future caller forgets to populate
+    // `composition_id`. The field doc says the caller must supply it;
+    // a silent empty string in an ACLI envelope would be a nasty
+    // debugging experience.
+    debug_assert!(
+        !ctx.composition_id.is_empty(),
+        "EmitCtx::composition_id must be computed by the caller on \
+         the pre-resolution graph; see the cache-hit and fresh-compose \
+         paths in cmd_compose for the contract"
+    );
+    let composition_id = ctx.composition_id.clone();
     let graph_json = serialize_graph(ctx.graph).unwrap_or_else(|_| "{}".into());
 
     let synthesized_json: Vec<serde_json::Value> = ctx
